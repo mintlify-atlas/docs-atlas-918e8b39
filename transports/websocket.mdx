@@ -1,0 +1,494 @@
+---
+title: "WebSocket Transport"
+description: "Use WebSockets for full-duplex, low-latency MCP communication"
+---
+
+The WebSocket transport provides full-duplex, bidirectional communication with low latency. It's ideal for scenarios requiring lots of server-initiated notifications or long-running interactive sessions.
+
+## Overview
+
+WebSocket transport features:
+
+- Full-duplex bidirectional communication
+- Low latency for real-time interactions
+- Binary or text frame support
+- Automatic connection management
+- Works well behind reverse proxies
+
+## Client Setup
+
+### Basic Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.WebSockets
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.WebSocketClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+
+val httpClient = HttpClient {
+    install(WebSockets)
+}
+
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "ws://localhost:3000/mcp"
+)
+
+val client = Client(
+    clientInfo = Implementation(
+        name = "my-client",
+        version = "1.0.0"
+    )
+)
+
+client.connect(transport)
+```
+
+### With TLS/WSS
+
+```kotlin
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://example.com/mcp"  // Use wss:// for secure connections
+)
+```
+
+### With Custom Headers
+
+```kotlin
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "ws://localhost:3000/mcp"
+) {
+    headers {
+        append("Authorization", "Bearer $token")
+        append("X-Custom-Header", "value")
+    }
+}
+```
+
+### Complete Client Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.WebSockets
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.WebSocketClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    val httpClient = HttpClient {
+        install(WebSockets) {
+            pingInterval = 30_000  // 30 seconds
+        }
+    }
+
+    val client = Client(
+        clientInfo = Implementation(
+            name = "example-client",
+            version = "1.0.0"
+        )
+    )
+
+    val transport = WebSocketClientTransport(
+        client = httpClient,
+        urlString = "ws://localhost:3000/mcp"
+    )
+
+    client.connect(transport)
+
+    // List available resources
+    val resources = client.listResources()
+    println("Available resources: ${resources.resources.map { it.name }}")
+
+    // Clean up
+    client.close()
+    httpClient.close()
+}
+```
+
+## Server Setup
+
+### Basic Example
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.WebSocketMcpServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "my-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    embeddedServer(CIO, port = 3000) {
+        install(WebSockets)
+        
+        routing {
+            webSocket("/mcp") {
+                val transport = WebSocketMcpServerTransport(this)
+                server.createSession(transport)
+            }
+        }
+    }.start(wait = true)
+}
+```
+
+### With Ping/Pong
+
+```kotlin
+import kotlin.time.Duration.Companion.seconds
+
+embeddedServer(CIO, port = 3000) {
+    install(WebSockets) {
+        pingPeriod = 30.seconds
+        timeout = 60.seconds
+        maxFrameSize = Long.MAX_VALUE
+        masking = false
+    }
+    
+    routing {
+        webSocket("/mcp") {
+            val transport = WebSocketMcpServerTransport(this)
+            server.createSession(transport)
+        }
+    }
+}.start(wait = true)
+```
+
+### Multiple Endpoints
+
+```kotlin
+routing {
+    webSocket("/mcp/v1") {
+        val transport = WebSocketMcpServerTransport(this)
+        val serverV1 = createServerV1()
+        serverV1.createSession(transport)
+    }
+    
+    webSocket("/mcp/v2") {
+        val transport = WebSocketMcpServerTransport(this)
+        val serverV2 = createServerV2()
+        serverV2.createSession(transport)
+    }
+}
+```
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="Client">
+    ### WebSocketClientTransport Parameters
+
+    - **client** (required): `HttpClient` - Ktor HTTP client with WebSockets plugin
+    - **urlString** (optional): `String?` - WebSocket URL (null to use request builder)
+    - **requestBuilder** (optional): `HttpRequestBuilder.() -> Unit` - Custom request config
+
+    ### WebSocket Client Configuration
+
+    ```kotlin
+    HttpClient {
+        install(WebSockets) {
+            pingInterval = 30_000      // Ping interval in milliseconds
+            maxFrameSize = 1024 * 1024 // Max frame size in bytes
+            contentConverter = ...      // Custom content converter
+        }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Server">
+    ### WebSocketMcpServerTransport Parameters
+
+    - **session** (required): `WebSocketServerSession` - Ktor WebSocket session
+
+    ### WebSocket Server Configuration
+
+    ```kotlin
+    install(WebSockets) {
+        pingPeriod = Duration.seconds(30)   // Ping interval
+        timeout = Duration.seconds(60)      // Connection timeout
+        maxFrameSize = Long.MAX_VALUE       // Max frame size
+        masking = false                     // WebSocket masking
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Subprotocol
+
+The MCP WebSocket transport uses the `mcp` subprotocol:
+
+```kotlin
+// Client automatically sets
+header(HttpHeaders.SecWebSocketProtocol, "mcp")
+
+// Server validates
+val subprotocol = session.call.request.headers[HttpHeaders.SecWebSocketProtocol]
+check(subprotocol == "mcp") { "Invalid subprotocol" }
+```
+
+## Complete Example
+
+<CodeGroup>
+```kotlin Server
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.WebSocketMcpServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlin.time.Duration.Companion.seconds
+
+fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "ws-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    // Add a tool
+    server.addTool(
+        name = "greet",
+        description = "Greets a person by name"
+    ) { request ->
+        val name = request.arguments?.get("name")?.toString() ?: "stranger"
+        CallToolResult(
+            content = listOf(TextContent("Hello, $name!"))
+        )
+    }
+
+    embeddedServer(CIO, host = "127.0.0.1", port = 3000) {
+        install(WebSockets) {
+            pingPeriod = 30.seconds
+            timeout = 60.seconds
+        }
+        
+        routing {
+            webSocket("/mcp") {
+                val transport = WebSocketMcpServerTransport(this)
+                val session = server.createSession(transport)
+                
+                session.onClose {
+                    println("WebSocket session closed")
+                }
+            }
+        }
+    }.start(wait = true)
+}
+```
+
+```kotlin Client
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.WebSockets
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.WebSocketClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+fun main() = runBlocking {
+    val httpClient = HttpClient {
+        install(WebSockets) {
+            pingInterval = 30_000
+        }
+    }
+
+    val client = Client(
+        clientInfo = Implementation(
+            name = "ws-client",
+            version = "1.0.0"
+        )
+    )
+
+    val transport = WebSocketClientTransport(
+        client = httpClient,
+        urlString = "ws://localhost:3000/mcp"
+    )
+
+    client.connect(transport)
+
+    // Call the greet tool
+    val result = client.callTool(
+        name = "greet",
+        arguments = buildJsonObject {
+            put("name", "Alice")
+        }
+    )
+
+    println(result.content.joinToString())
+
+    client.close()
+    httpClient.close()
+}
+```
+</CodeGroup>
+
+## Error Handling
+
+```kotlin
+// Client
+transport.onError { error ->
+    println("WebSocket error: ${error.message}")
+}
+
+// Server
+val session = server.createSession(transport)
+session.onError { error ->
+    println("Session error: ${error.message}")
+}
+```
+
+## Connection Lifecycle
+
+```kotlin
+// Server
+val session = server.createSession(transport)
+
+session.onClose {
+    println("WebSocket connection closed")
+    // Clean up resources
+}
+```
+
+## Platform Support
+
+- **JVM**: ✅ Full support
+- **Native**: ✅ Full support  
+- **JS/Wasm**: ✅ Full support
+
+## Security
+
+### Use WSS in Production
+
+```kotlin
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://example.com/mcp"  // Secure WebSocket
+)
+```
+
+### Authentication
+
+```kotlin
+// Via headers
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://example.com/mcp"
+) {
+    header("Authorization", "Bearer $token")
+}
+
+// Via query parameters
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://example.com/mcp?token=$token"
+)
+```
+
+### Server-Side Validation
+
+```kotlin
+webSocket("/mcp") {
+    val token = call.request.queryParameters["token"]
+    if (!validateToken(token)) {
+        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid token"))
+        return@webSocket
+    }
+    
+    val transport = WebSocketMcpServerTransport(this)
+    server.createSession(transport)
+}
+```
+
+## Best Practices
+
+1. **Enable ping/pong**: Keep connections alive through firewalls and proxies
+2. **Set reasonable timeouts**: Configure both ping and connection timeouts
+3. **Handle reconnection**: Implement exponential backoff for automatic reconnection
+4. **Limit frame size**: Prevent memory exhaustion from large frames
+5. **Use WSS in production**: Always use secure WebSockets over TLS
+6. **Validate subprotocol**: Ensure the `mcp` subprotocol is used
+7. **Clean up resources**: Properly close connections and free resources
+
+## Performance Tuning
+
+```kotlin
+import io.ktor.client.engine.cio.CIO
+
+val httpClient = HttpClient(CIO) {
+    engine {
+        maxConnectionsCount = 100
+        endpoint {
+            maxConnectionsPerRoute = 10
+            connectTimeout = 5_000
+        }
+    }
+    
+    install(WebSockets) {
+        maxFrameSize = 1024 * 1024  // 1 MB
+        pingInterval = 30_000        // 30 seconds
+    }
+}
+```
+
+## Proxy Configuration
+
+```kotlin
+import io.ktor.client.engine.ProxyBuilder
+import io.ktor.http.Url
+
+val httpClient = HttpClient(CIO) {
+    engine {
+        proxy = ProxyBuilder.http(Url("http://proxy.example.com:8080"))
+    }
+    install(WebSockets)
+}
+```
+
+## Comparison with Other Transports
+
+| Feature | WebSocket | SSE | STDIO |
+|---------|-----------|-----|-------|
+| Bidirectional | ✅ | ❌ | ✅ |
+| Low Latency | ✅ | ⚠️ | ✅ |
+| Proxy Friendly | ✅ | ✅ | ❌ |
+| Setup Complexity | Medium | Low | Low |
+| Use Case | Real-time apps | Notifications | Local tools |
+
+## Related Resources
+
+- [Ktor WebSockets Documentation](https://ktor.io/docs/websocket.html)
+- [Client API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/-web-socket-client-transport/index.html)
+- [Server API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-web-socket-mcp-server-transport/index.html)
+- [Streamable HTTP Transport](/transports/streamable-http)

@@ -1,0 +1,507 @@
+---
+title: "Testing Transport"
+description: "Use ChannelTransport for testing and local MCP development"
+---
+
+The `ChannelTransport` provides a simple, in-memory transport for testing MCP functionality without network setup. It uses Kotlin coroutines channels for full-duplex communication between client and server.
+
+<Note>
+  This transport is part of the `kotlin-sdk-testing` module and marked with `@ExperimentalMcpApi`. It's designed for testing and development, not production use.
+</Note>
+
+## Overview
+
+ChannelTransport features:
+
+- In-memory communication (no networking)
+- Full-duplex message passing via coroutines channels
+- Linked client/server pairs for easy testing
+- Zero latency for fast test execution
+- Simple setup with no external dependencies
+
+## Installation
+
+Add the testing module to your dependencies:
+
+```kotlin
+dependencies {
+    testImplementation("io.modelcontextprotocol:kotlin-sdk-testing:$mcpVersion")
+}
+```
+
+## Basic Usage
+
+### Creating a Linked Pair
+
+The simplest way to set up a test client and server:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.ExperimentalMcpApi
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.testing.ChannelTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Test
+
+@OptIn(ExperimentalMcpApi::class)
+class MyMcpTest {
+    @Test
+    fun `test tool execution`() = runTest {
+        // Create linked transports
+        val (clientTransport, serverTransport) = 
+            ChannelTransport.createLinkedPair()
+
+        // Create client and server
+        val client = Client(
+            clientInfo = Implementation("test-client", "1.0.0")
+        )
+        
+        val server = Server(
+            serverInfo = Implementation("test-server", "1.0.0")
+        )
+
+        // Connect
+        client.connect(clientTransport)
+        server.createSession(serverTransport)
+
+        // Test operations
+        val tools = client.listTools()
+        assert(tools.tools.isNotEmpty())
+    }
+}
+```
+
+### Using Separate Channels
+
+For more control, create transport with separate send/receive channels:
+
+```kotlin
+import kotlinx.coroutines.channels.Channel
+
+@OptIn(ExperimentalMcpApi::class)
+val sendChannel = Channel<JSONRPCMessage>(capacity = 256)
+val receiveChannel = Channel<JSONRPCMessage>(capacity = 256)
+
+val transport = ChannelTransport(
+    sendChannel = sendChannel,
+    receiveChannel = receiveChannel
+)
+```
+
+### Using a Single Channel
+
+For simple scenarios, use a single channel for both directions:
+
+```kotlin
+@OptIn(ExperimentalMcpApi::class)
+val channel = Channel<JSONRPCMessage>(Channel.UNLIMITED)
+
+val transport = ChannelTransport(channel = channel)
+```
+
+## Testing Examples
+
+### Testing Tools
+
+```kotlin
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.collections.shouldHaveSize
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test tool returns correct result`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair()
+
+    val server = Server(
+        serverInfo = Implementation("test-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools()
+            )
+        )
+    )
+
+    server.addTool(
+        name = "multiply",
+        description = "Multiplies two numbers"
+    ) { request ->
+        val a = request.arguments?.get("a")?.toString()?.toInt() ?: 0
+        val b = request.arguments?.get("b")?.toString()?.toInt() ?: 0
+        CallToolResult(
+            content = listOf(TextContent((a * b).toString()))
+        )
+    }
+
+    val client = Client(
+        clientInfo = Implementation("test-client", "1.0.0")
+    )
+
+    client.connect(clientTransport)
+    server.createSession(serverTransport)
+
+    val result = client.callTool(
+        name = "multiply",
+        arguments = buildJsonObject {
+            put("a", 6)
+            put("b", 7)
+        }
+    )
+
+    result.content shouldHaveSize 1
+    (result.content[0] as TextContent).text shouldBe "42"
+}
+```
+
+### Testing Resources
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
+
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test resource reading`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair()
+
+    val server = Server(
+        serverInfo = Implementation("test-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                resources = ServerCapabilities.Resources()
+            )
+        )
+    )
+
+    server.addResource(
+        uri = "test://data",
+        name = "Test Data",
+        description = "Test resource",
+        mimeType = "text/plain"
+    ) { request ->
+        ReadResourceResult(
+            contents = listOf(
+                TextResourceContents(
+                    text = "Hello from test resource",
+                    uri = request.uri,
+                    mimeType = "text/plain"
+                )
+            )
+        )
+    }
+
+    val client = Client(
+        clientInfo = Implementation("test-client", "1.0.0")
+    )
+
+    client.connect(clientTransport)
+    server.createSession(serverTransport)
+
+    val result = client.readResource("test://data")
+    val content = result.contents[0] as TextResourceContents
+    
+    content.text shouldBe "Hello from test resource"
+    content.mimeType shouldBe "text/plain"
+}
+```
+
+### Testing Prompts
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.GetPromptResult
+import io.modelcontextprotocol.kotlin.sdk.types.PromptArgument
+import io.modelcontextprotocol.kotlin.sdk.types.PromptMessage
+import io.modelcontextprotocol.kotlin.sdk.types.Role
+
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test prompt with arguments`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair()
+
+    val server = Server(
+        serverInfo = Implementation("test-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                prompts = ServerCapabilities.Prompts()
+            )
+        )
+    )
+
+    server.addPrompt(
+        name = "greeting",
+        description = "Generates a greeting",
+        arguments = listOf(
+            PromptArgument(
+                name = "name",
+                description = "Name to greet",
+                required = true
+            )
+        )
+    ) { request ->
+        val name = request.arguments?.get("name")
+        GetPromptResult(
+            description = "Greeting prompt",
+            messages = listOf(
+                PromptMessage(
+                    role = Role.User,
+                    content = TextContent("Hello, $name!")
+                )
+            )
+        )
+    }
+
+    val client = Client(
+        clientInfo = Implementation("test-client", "1.0.0")
+    )
+
+    client.connect(clientTransport)
+    server.createSession(serverTransport)
+
+    val result = client.getPrompt(
+        name = "greeting",
+        arguments = mapOf("name" to "Alice")
+    )
+
+    result.messages shouldHaveSize 1
+    val message = result.messages[0].content as TextContent
+    message.text shouldBe "Hello, Alice!"
+}
+```
+
+## Configuration
+
+### Constructor Parameters
+
+```kotlin
+ChannelTransport(
+    sendChannel: SendChannel<JSONRPCMessage>,
+    receiveChannel: ReceiveChannel<JSONRPCMessage>,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default
+)
+```
+
+- **sendChannel**: Channel for outbound messages
+- **receiveChannel**: Channel for inbound messages  
+- **dispatcher**: Coroutine dispatcher for message processing (default: `Dispatchers.Default`)
+
+### Linked Pair Creation
+
+```kotlin
+ChannelTransport.createLinkedPair(
+    capacity: Int = 256,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default
+): LinkedTransports
+```
+
+- **capacity**: Buffer capacity for internal channels
+- **dispatcher**: Coroutine dispatcher for both transports
+
+## Error Handling
+
+```kotlin
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test error handling`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair()
+
+    var clientError: Throwable? = null
+    clientTransport.onError { error ->
+        clientError = error
+    }
+
+    var serverError: Throwable? = null  
+    serverTransport.onError { error ->
+        serverError = error
+    }
+
+    // Test error scenarios
+    // ...
+}
+```
+
+## Lifecycle Management
+
+```kotlin
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test cleanup`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair()
+
+    // ... test operations ...
+
+    // Close transports
+    clientTransport.close()
+    serverTransport.close()
+}
+```
+
+## Integration with Test Frameworks
+
+### JUnit 5
+
+```kotlin
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+
+@OptIn(ExperimentalMcpApi::class)
+class McpIntegrationTest {
+    private lateinit var client: Client
+    private lateinit var server: Server
+    private lateinit var clientTransport: ChannelTransport
+    private lateinit var serverTransport: ChannelTransport
+
+    @BeforeEach
+    fun setup() = runTest {
+        val (ct, st) = ChannelTransport.createLinkedPair()
+        clientTransport = ct
+        serverTransport = st
+
+        client = Client(Implementation("test-client", "1.0.0"))
+        server = Server(Implementation("test-server", "1.0.0"))
+
+        client.connect(clientTransport)
+        server.createSession(serverTransport)
+    }
+
+    @AfterEach
+    fun cleanup() = runTest {
+        client.close()
+        clientTransport.close()
+        serverTransport.close()
+    }
+
+    @Test
+    fun `test operations`() = runTest {
+        // Use client and server
+    }
+}
+```
+
+### Kotest
+
+```kotlin
+import io.kotest.core.spec.style.FunSpec
+
+@OptIn(ExperimentalMcpApi::class)
+class McpTest : FunSpec({
+    lateinit var client: Client
+    lateinit var clientTransport: ChannelTransport
+    lateinit var serverTransport: ChannelTransport
+
+    beforeEach {
+        val (ct, st) = ChannelTransport.createLinkedPair()
+        clientTransport = ct
+        serverTransport = st
+
+        client = Client(Implementation("test-client", "1.0.0"))
+        val server = Server(Implementation("test-server", "1.0.0"))
+
+        client.connect(clientTransport)
+        server.createSession(serverTransport)
+    }
+
+    afterEach {
+        client.close()
+        clientTransport.close()
+        serverTransport.close()
+    }
+
+    test("list tools") {
+        val tools = client.listTools()
+        tools.tools shouldHaveSize 0
+    }
+})
+```
+
+## Platform Support
+
+- **JVM**: ✅ Full support
+- **Native**: ✅ Full support  
+- **JS/Wasm**: ✅ Full support
+
+## Best Practices
+
+1. **Use linked pairs**: Simplify test setup with `createLinkedPair()`
+2. **Clean up resources**: Always close transports and clients in `@AfterEach`
+3. **Use test dispatchers**: Leverage `kotlinx-coroutines-test` for better test control
+4. **Set appropriate capacity**: Use larger buffers for tests with many messages
+5. **Test error paths**: Verify error handling with `onError` callbacks
+6. **Isolate tests**: Create fresh transports for each test to avoid state leakage
+
+## Comparison with Other Transports
+
+| Feature | ChannelTransport | STDIO | WebSocket |
+|---------|------------------|-------|------------|
+| Setup | Instant | Process spawn | Network |
+| Latency | Zero | Very low | Low |
+| Use Case | Testing | Local dev | Production |
+| Dependencies | None | Process | Network |
+| Production | ❌ | ✅ | ✅ |
+
+## Common Patterns
+
+### Testing Concurrent Operations
+
+```kotlin
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test concurrent tool calls`() = runTest {
+    val (clientTransport, serverTransport) = 
+        ChannelTransport.createLinkedPair(capacity = 1000)
+
+    // Setup client and server
+    // ...
+
+    // Launch concurrent operations
+    val results = (1..100).map { i ->
+        async {
+            client.callTool(
+                name = "echo",
+                arguments = buildJsonObject { put("value", i) }
+            )
+        }
+    }.awaitAll()
+
+    results shouldHaveSize 100
+}
+```
+
+### Testing with Custom Dispatchers
+
+```kotlin
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+
+@OptIn(ExperimentalMcpApi::class)
+@Test
+fun `test with controlled dispatcher`() {
+    val testDispatcher = StandardTestDispatcher()
+    val testScope = TestScope(testDispatcher)
+
+    testScope.runTest {
+        val (clientTransport, serverTransport) = 
+            ChannelTransport.createLinkedPair(
+                dispatcher = testDispatcher
+            )
+
+        // Test with controlled time
+    }
+}
+```
+
+## Related Resources
+
+- [ChannelTransport API Reference](/api/testing/channel-transport)
+- [Full API Documentation](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-testing/io.modelcontextprotocol.kotlin.sdk.testing/-channel-transport/index.html)
+- [Kotlin Coroutines Test](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/)
+- [STDIO Transport](/transports/stdio)

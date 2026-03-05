@@ -1,0 +1,448 @@
+---
+title: Resources
+description: Expose data sources for LLM context augmentation
+---
+
+Resources are application-driven context that clients discover and fetch to augment LLM interactions. They represent any data the server wants to expose: files, API responses, database queries, or generated content.
+
+## When to Use Resources
+
+Resources are ideal for:
+
+- Exposing files or documents
+- Providing API data or database query results
+- Sharing generated content (reports, summaries)
+- Offering real-time data feeds
+- Making structured or unstructured data available to LLMs
+
+<Note>
+  Resources are **application-controlled**. The server decides what data to expose. For user-initiated templates, use [Prompts](/server/prompts) instead.
+</Note>
+
+## Enabling Resource Support
+
+Declare the `resources` capability in your server options:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation(
+        name = "example-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            resources = ServerCapabilities.Resources(
+                subscribe = true,
+                listChanged = true
+            ),
+        ),
+    )
+)
+```
+
+<ParamField path="subscribe" type="boolean" default="false">
+  Set to `true` to allow clients to subscribe to resource updates. When a subscribed resource changes, the server sends `notifications/resources/updated`.
+</ParamField>
+
+<ParamField path="listChanged" type="boolean" default="false">
+  Set to `true` if your resource catalog can change at runtime. The server will notify clients when resources are added or removed.
+</ParamField>
+
+## Adding Resources
+
+### Simple Text Resource
+
+Create a basic text resource:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
+
+server.addResource(
+    uri = "config://app/settings",
+    name = "App Settings",
+    description = "Current application configuration",
+    mimeType = "application/json",
+) { request ->
+    val config = """{
+        "version": "1.0.0",
+        "environment": "production"
+    }""".trimIndent()
+    
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                text = config,
+                uri = request.uri,
+                mimeType = "application/json",
+            ),
+        ),
+    )
+}
+```
+
+### Markdown Resource
+
+Expose documentation or reports as markdown:
+
+```kotlin
+server.addResource(
+    uri = "note://release/latest",
+    name = "Release notes",
+    description = "Last deployment summary",
+    mimeType = "text/markdown",
+) { request ->
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                text = "Ship 42 reached production successfully.",
+                uri = request.uri,
+                mimeType = "text/markdown",
+            ),
+        ),
+    )
+}
+```
+
+### Dynamic Resource
+
+Generate content dynamically when requested:
+
+```kotlin
+server.addResource(
+    uri = "https://search.com/",
+    name = "Web Search",
+    description = "Web search engine",
+    mimeType = "text/html",
+) { request ->
+    // Fetch or generate content dynamically
+    val content = fetchWebContent(request.uri)
+    
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                text = content,
+                uri = request.uri,
+                mimeType = "text/html",
+            ),
+        ),
+    )
+}
+```
+
+### Binary Resource
+
+For binary data like images or PDFs, use `BlobResourceContents`:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.BlobResourceContents
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+
+@OptIn(ExperimentalEncodingApi::class)
+server.addResource(
+    uri = "file://images/logo.png",
+    name = "Company Logo",
+    description = "PNG logo image",
+    mimeType = "image/png",
+) { request ->
+    val imageBytes = loadImageBytes()
+    val base64 = Base64.encode(imageBytes)
+    
+    ReadResourceResult(
+        contents = listOf(
+            BlobResourceContents(
+                blob = base64,
+                uri = request.uri,
+                mimeType = "image/png",
+            ),
+        ),
+    )
+}
+```
+
+## API Signatures
+
+### addResource
+
+```kotlin
+fun addResource(
+    uri: String,
+    name: String,
+    description: String,
+    mimeType: String = "text/html",
+    readHandler: suspend ClientConnection.(ReadResourceRequest) -> ReadResourceResult
+)
+```
+
+<ParamField path="uri" type="String" required>
+  Unique URI identifying this resource. Use a custom scheme (like `config://`, `note://`) or standard URIs.
+</ParamField>
+
+<ParamField path="name" type="String" required>
+  Human-readable name shown to users when browsing resources.
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Description of the resource's content and purpose.
+</ParamField>
+
+<ParamField path="mimeType" type="String" default="text/html">
+  MIME type of the resource content (e.g., `text/plain`, `application/json`, `image/png`).
+</ParamField>
+
+<ParamField path="readHandler" type="suspend (ReadResourceRequest) -> ReadResourceResult" required>
+  Handler function that returns the resource content when requested by a client.
+</ParamField>
+
+## Managing Resources
+
+### Add Multiple Resources
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.RegisteredResource
+import io.modelcontextprotocol.kotlin.sdk.types.Resource
+
+val resources = listOf(
+    RegisteredResource(
+        resource = Resource(
+            uri = "file://data/file1.txt",
+            name = "File 1",
+            description = "First file",
+            mimeType = "text/plain"
+        ),
+        readHandler = { request -> /* ... */ }
+    ),
+    RegisteredResource(
+        resource = Resource(
+            uri = "file://data/file2.txt",
+            name = "File 2",
+            description = "Second file",
+            mimeType = "text/plain"
+        ),
+        readHandler = { request -> /* ... */ }
+    ),
+)
+
+server.addResources(resources)
+```
+
+### Remove Resources
+
+```kotlin
+// Remove a single resource by URI
+val removed: Boolean = server.removeResource("config://app/settings")
+
+// Remove multiple resources
+val count: Int = server.removeResources(
+    listOf("file://data/file1.txt", "file://data/file2.txt")
+)
+```
+
+<Warning>
+  When you add or remove resources at runtime, the server automatically sends `notifications/resources/list_changed` to all clients if `listChanged = true` in capabilities.
+</Warning>
+
+## Resource Subscriptions
+
+When `subscribe = true`, clients can subscribe to resource updates:
+
+### Client Subscribes
+
+Client sends a subscription request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/subscribe",
+  "id": 1,
+  "params": {
+    "uri": "config://app/settings"
+  }
+}
+```
+
+### Notify Subscribers
+
+When a resource changes, notify subscribed clients:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotification
+import io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotificationParams
+
+// Notify a specific session
+suspend fun notifyResourceChange(sessionId: String, resourceUri: String) {
+    server.sendResourceUpdated(
+        sessionId = sessionId,
+        notification = ResourceUpdatedNotification(
+            params = ResourceUpdatedNotificationParams(uri = resourceUri)
+        )
+    )
+}
+```
+
+### Client Unsubscribes
+
+Client can unsubscribe:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/unsubscribe",
+  "id": 2,
+  "params": {
+    "uri": "config://app/settings"
+  }
+}
+```
+
+## Accessing Active Resources
+
+Get a snapshot of all registered resources:
+
+```kotlin
+val activeResources: Map<String, RegisteredResource> = server.resources
+
+activeResources.forEach { (uri, registered) ->
+    println("Resource: $uri")
+    println("  Name: ${registered.resource.name}")
+    println("  Description: ${registered.resource.description}")
+    println("  MIME: ${registered.resource.mimeType}")
+}
+```
+
+## Client Request Flow
+
+<Steps>
+
+### Client Lists Resources
+
+Client calls `resources/list` to discover available resources:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/list",
+  "id": 1
+}
+```
+
+Server responds:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resources": [
+      {
+        "uri": "config://app/settings",
+        "name": "App Settings",
+        "description": "Current application configuration",
+        "mimeType": "application/json"
+      }
+    ]
+  }
+}
+```
+
+### Client Reads Resource
+
+Client calls `resources/read` to fetch content:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/read",
+  "id": 2,
+  "params": {
+    "uri": "config://app/settings"
+  }
+}
+```
+
+### Server Returns Content
+
+Your handler is invoked:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "contents": [
+      {
+        "uri": "config://app/settings",
+        "mimeType": "application/json",
+        "text": "{\"version\": \"1.0.0\", \"environment\": \"production\"}"
+      }
+    ]
+  }
+}
+```
+
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Descriptive URIs" icon="link">
+    Choose URI schemes that clearly indicate the resource type. Examples: `file://`, `db://`, `api://`, `config://`.
+  </Card>
+  
+  <Card title="Set Correct MIME Types" icon="file-code">
+    Use standard MIME types so clients can render or process content appropriately.
+  </Card>
+  
+  <Card title="Handle Large Content" icon="database">
+    For large resources, consider pagination or streaming. Don't load everything into memory at once.
+  </Card>
+  
+  <Card title="Cache When Appropriate" icon="clock">
+    If generating content is expensive, cache results and invalidate when needed.
+  </Card>
+</CardGroup>
+
+## Error Handling
+
+Handle errors gracefully in resource handlers:
+
+```kotlin
+server.addResource(
+    uri = "api://data/users",
+    name = "User Data",
+    description = "Current user list",
+    mimeType = "application/json",
+) { request ->
+    try {
+        val users = fetchUsersFromDatabase()
+        ReadResourceResult(
+            contents = listOf(
+                TextResourceContents(
+                    text = Json.encodeToString(users),
+                    uri = request.uri,
+                    mimeType = "application/json",
+                ),
+            ),
+        )
+    } catch (e: Exception) {
+        // Throwing an exception results in a JSON-RPC error response
+        throw IllegalStateException("Failed to fetch user data: ${e.message}", e)
+    }
+}
+```
+
+<Note>
+  Exceptions thrown in resource handlers are automatically converted to JSON-RPC error responses sent to the client.
+</Note>
+
+## Related Topics
+
+- [Prompts](/server/prompts) - For user-controlled templates
+- [Tools](/server/tools) - For executable functions
+- [Pagination](/server/pagination) - For paginating large resource lists

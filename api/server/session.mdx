@@ -1,0 +1,491 @@
+---
+title: ServerSession
+description: Individual client session management
+---
+
+The `ServerSession` class represents a single client connection to an MCP server. Each session manages its own protocol state, client capabilities, and request handlers.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.server
+```
+
+## Class Definition
+
+```kotlin
+open class ServerSession(
+    protected val serverInfo: Implementation,
+    options: ServerOptions,
+    protected val instructions: String?
+) : Protocol(options)
+```
+
+<ParamField path="serverInfo" type="Implementation" required>
+  Information about the server implementation
+</ParamField>
+
+<ParamField path="options" type="ServerOptions" required>
+  Server configuration options
+</ParamField>
+
+<ParamField path="instructions" type="String">
+  Optional instructions for the client
+</ParamField>
+
+## Properties
+
+<ResponseField name="sessionId" type="String">
+  Unique identifier for this session (UUID).
+  
+  ```kotlin
+  val sessionId: String
+  ```
+</ResponseField>
+
+<ResponseField name="clientCapabilities" type="ClientCapabilities?">
+  The client's reported capabilities after initialization, or null if not yet initialized.
+  
+  ```kotlin
+  var clientCapabilities: ClientCapabilities?
+  ```
+</ResponseField>
+
+<ResponseField name="clientVersion" type="Implementation?">
+  The client's version information after initialization.
+  
+  ```kotlin
+  var clientVersion: Implementation?
+  ```
+</ResponseField>
+
+<ResponseField name="clientConnection" type="ClientConnection">
+  Interface for making requests to the connected client.
+  
+  ```kotlin
+  val clientConnection: ClientConnection
+  ```
+</ResponseField>
+
+## Methods
+
+### Lifecycle Callbacks
+
+#### onInitialized
+
+Registers a callback invoked when the session has completed initialization.
+
+```kotlin
+fun onInitialized(block: () -> Unit)
+```
+
+**Example:**
+
+```kotlin
+session.onInitialized {
+    println("Session ${session.sessionId} initialized")
+    println("Client: ${session.clientVersion?.name} ${session.clientVersion?.version}")
+}
+```
+
+#### onClose
+
+Registers a callback invoked when the session is closing.
+
+```kotlin
+fun onClose(block: () -> Unit)
+```
+
+**Example:**
+
+```kotlin
+session.onClose {
+    println("Session ${session.sessionId} closed")
+    cleanupSessionResources()
+}
+```
+
+### Client Requests
+
+These methods allow the server to make requests to the connected client.
+
+#### ping
+
+Sends a ping request to check connectivity.
+
+```kotlin
+suspend fun ping(): EmptyResult
+```
+
+**Example:**
+
+```kotlin
+try {
+    session.ping()
+    println("Client is responsive")
+} catch (e: Exception) {
+    println("Client not responding")
+}
+```
+
+#### createMessage
+
+Creates a message using the client's sampling capability (if supported).
+
+```kotlin
+suspend fun createMessage(
+    params: CreateMessageRequest,
+    options: RequestOptions? = null
+): CreateMessageResult
+```
+
+<ParamField path="params" type="CreateMessageRequest" required>
+  Parameters for message creation
+</ParamField>
+
+<ParamField path="options" type="RequestOptions">
+  Optional request options
+</ParamField>
+
+**Example:**
+
+```kotlin
+val result = session.createMessage(
+    CreateMessageRequest(
+        CreateMessageRequestParams(
+            messages = listOf(
+                SamplingMessage(
+                    role = Role.User,
+                    content = TextContent("Summarize this document")
+                )
+            ),
+            maxTokens = 1000
+        )
+    )
+)
+```
+
+#### listRoots
+
+Lists the available roots from the client's perspective (if supported).
+
+```kotlin
+suspend fun listRoots(
+    params: JsonObject = EmptyJsonObject,
+    options: RequestOptions? = null
+): ListRootsResult
+```
+
+**Example:**
+
+```kotlin
+if (session.clientCapabilities?.roots != null) {
+    val roots = session.listRoots()
+    roots.roots.forEach { root ->
+        println("Root: ${root.name} (${root.uri})")
+    }
+}
+```
+
+#### createElicitation
+
+Sends a message to the client requesting an elicitation (form display).
+
+```kotlin
+suspend fun createElicitation(
+    message: String,
+    requestedSchema: ElicitRequestParams.RequestedSchema,
+    options: RequestOptions? = null
+): ElicitResult
+```
+
+<ParamField path="message" type="String" required>
+  Message to display to the end user
+</ParamField>
+
+<ParamField path="requestedSchema" type="RequestedSchema" required>
+  Schema for the elicitation result
+</ParamField>
+
+**Example:**
+
+```kotlin
+if (session.clientCapabilities?.elicitation != null) {
+    val result = session.createElicitation(
+        message = "Please provide your preferences",
+        requestedSchema = ElicitRequestParams.RequestedSchema(
+            type = "object",
+            properties = buildJsonObject {
+                put("theme", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        add("light")
+                        add("dark")
+                    })
+                })
+            }
+        )
+    )
+}
+```
+
+### Notifications
+
+These methods send notifications to the client.
+
+#### sendLoggingMessage
+
+Sends a logging message to the client.
+
+```kotlin
+suspend fun sendLoggingMessage(notification: LoggingMessageNotification)
+```
+
+**Example:**
+
+```kotlin
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Info,
+            logger = "my-server",
+            data = "Processing request..."
+        )
+    )
+)
+```
+
+Messages are automatically filtered based on the logging level set by the client.
+
+#### sendResourceUpdated
+
+Notifies the client that a specific resource has changed.
+
+```kotlin
+suspend fun sendResourceUpdated(notification: ResourceUpdatedNotification)
+```
+
+**Example:**
+
+```kotlin
+session.sendResourceUpdated(
+    ResourceUpdatedNotification(
+        ResourceUpdatedNotificationParams(
+            uri = "file:///data/users.json"
+        )
+    )
+)
+```
+
+#### sendResourceListChanged
+
+Notifies the client that the list of resources has changed.
+
+```kotlin
+suspend fun sendResourceListChanged()
+```
+
+**Example:**
+
+```kotlin
+// After adding/removing resources dynamically
+server.addResource(/* ... */)
+session.sendResourceListChanged()
+```
+
+#### sendToolListChanged
+
+Notifies the client that the list of tools has changed.
+
+```kotlin
+suspend fun sendToolListChanged()
+```
+
+**Example:**
+
+```kotlin
+server.addTool(/* ... */)
+session.sendToolListChanged()
+```
+
+#### sendPromptListChanged
+
+Notifies the client that the list of prompts has changed.
+
+```kotlin
+suspend fun sendPromptListChanged()
+```
+
+## ClientConnection
+
+The `clientConnection` property provides access to client-facing operations:
+
+```kotlin
+interface ClientConnection {
+    suspend fun ping(): EmptyResult
+    suspend fun createMessage(params: CreateMessageRequest, options: RequestOptions? = null): CreateMessageResult
+    suspend fun listRoots(params: JsonObject = EmptyJsonObject, options: RequestOptions? = null): ListRootsResult
+    suspend fun createElicitation(message: String, requestedSchema: ElicitRequestParams.RequestedSchema, options: RequestOptions? = null): ElicitResult
+    suspend fun sendLoggingMessage(notification: LoggingMessageNotification)
+    suspend fun sendResourceUpdated(notification: ResourceUpdatedNotification)
+    suspend fun sendResourceListChanged()
+    suspend fun sendToolListChanged()
+    suspend fun sendPromptListChanged()
+}
+```
+
+**Example:**
+
+```kotlin
+val connection = session.clientConnection
+connection.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Debug,
+            logger = "server",
+            data = "Debug info"
+        )
+    )
+)
+```
+
+## Session Lifecycle
+
+A typical session lifecycle:
+
+```kotlin
+val server = Server(serverInfo, options)
+
+// 1. Create session with transport
+val session = server.createSession(transport)
+
+// 2. Session automatically handles initialization
+//    - Receives InitializeRequest from client
+//    - Responds with InitializeResult (capabilities, version)
+//    - Waits for InitializedNotification
+
+// 3. Callbacks are invoked
+session.onInitialized {
+    println("Client initialized: ${session.clientCapabilities}")
+}
+
+// 4. Session handles client requests
+//    - Tools, prompts, resources based on server capabilities
+
+// 5. Server can make requests to client
+val roots = session.listRoots()
+
+// 6. Session closes
+session.close()
+```
+
+## Capability Checking
+
+The session automatically enforces capability checks:
+
+```kotlin
+// These methods throw IllegalStateException if client doesn't support the capability
+try {
+    session.createMessage(params)  // Requires sampling capability
+} catch (e: IllegalStateException) {
+    println("Client does not support sampling")
+}
+
+try {
+    session.listRoots()  // Requires roots capability
+} catch (e: IllegalStateException) {
+    println("Client does not support roots")
+}
+```
+
+You can check capabilities manually:
+
+```kotlin
+if (session.clientCapabilities?.sampling != null) {
+    val result = session.createMessage(params)
+}
+
+if (session.clientCapabilities?.roots != null) {
+    val roots = session.listRoots()
+}
+
+if (session.clientCapabilities?.elicitation != null) {
+    val elicitation = session.createElicitation(message, schema)
+}
+```
+
+## Logging Levels
+
+The session tracks the client's logging level preference:
+
+```kotlin
+// Client sets logging level via SetLevelRequest
+// Session automatically filters outgoing log messages
+
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Debug,  // Only sent if client level allows
+            logger = "server",
+            data = "Debug message"
+        )
+    )
+)
+```
+
+Logging levels (from least to most verbose):
+- `LoggingLevel.Critical`
+- `LoggingLevel.Error`
+- `LoggingLevel.Warning`
+- `LoggingLevel.Info`
+- `LoggingLevel.Debug`
+
+## Complete Example
+
+```kotlin
+val server = Server(serverInfo, options)
+
+val session = server.createSession(transport)
+
+session.onInitialized {
+    println("Client connected: ${session.clientVersion?.name}")
+    
+    // Check client capabilities
+    session.clientCapabilities?.let { caps ->
+        if (caps.roots != null) {
+            println("Client supports roots")
+        }
+        if (caps.sampling != null) {
+            println("Client supports sampling")
+        }
+    }
+}
+
+session.onClose {
+    println("Session ${session.sessionId} closed")
+}
+
+// Server can log to client
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Info,
+            logger = "my-server",
+            data = "Server ready"
+        )
+    )
+)
+
+// Make requests to client if supported
+if (session.clientCapabilities?.roots != null) {
+    val roots = session.listRoots()
+    println("Client roots: ${roots.roots}")
+}
+```
+
+## See Also
+
+- [Server](/api/server/server) - Server class that manages sessions
+- [Protocol](/api/core/protocol) - Base protocol implementation
+- [Server Transports](/api/server/transports) - Transport implementations
+- [Dokka: ServerSession](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-server-session/index.html)

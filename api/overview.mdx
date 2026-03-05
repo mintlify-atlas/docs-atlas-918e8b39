@@ -1,0 +1,94 @@
+---
+title: API Overview
+description: Complete reference for the MCP Kotlin SDK API
+---
+
+The MCP Kotlin SDK provides a complete implementation of the Model Context Protocol for Kotlin/JVM applications. The SDK is organized into modular packages that can be used independently or together.
+
+## Core Modules
+
+The SDK consists of four main modules:
+
+### kotlin-sdk-core
+
+Provides the foundational types, protocol implementation, and transport abstractions that power the MCP protocol.
+
+- **[Protocol](/api/core/protocol)** - Core protocol implementation handling JSON-RPC message framing
+- **[Types](/api/core/types)** - Complete type system for MCP protocol messages
+- **[Transport](/api/core/transport)** - Abstract transport layer for communication
+- **[JSON Utilities](/api/core/json-utils)** - JSON serialization helpers
+
+### kotlin-sdk-server
+
+Server-side implementation for creating MCP servers that expose tools, prompts, and resources.
+
+- **[Server](/api/server/server)** - High-level server implementation
+- **[ServerSession](/api/server/session)** - Individual client session management
+- **[Server Transports](/api/server/transports)** - Transport implementations (STDIO, SSE, WebSocket)
+- **[Ktor Extensions](/api/server/ktor-extensions)** - Integration helpers for Ktor applications
+
+### kotlin-sdk-client
+
+Client-side implementation for connecting to MCP servers and calling their capabilities.
+
+- **[Client](/api/client/client)** - High-level client implementation
+- **[Client Transports](/api/client/transports)** - Transport implementations (STDIO, SSE, WebSocket)
+- **[Ktor Extensions](/api/client/ktor-extensions)** - Integration helpers for Ktor HTTP clients
+
+### kotlin-sdk-testing
+
+Testing utilities for unit and integration tests.
+
+- **[ChannelTransport](/api/testing/channel-transport)** - In-memory transport for testing
+
+## Quick Reference
+
+### Creating a Server
+
+```kotlin
+val server = Server(
+    serverInfo = Implementation("my-server", "1.0.0"),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools(listChanged = true)
+        )
+    )
+)
+
+server.addTool(
+    name = "get_weather",
+    description = "Get weather for a location",
+    inputSchema = ToolSchema()
+) { request ->
+    CallToolResult(
+        content = listOf(TextContent("Sunny, 72°F"))
+    )
+}
+```
+
+### Creating a Client
+
+```kotlin
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities()
+    )
+)
+
+client.connect(transport)
+
+val result = client.callTool(
+    name = "get_weather",
+    arguments = mapOf("location" to "San Francisco")
+)
+```
+
+## Dokka API Documentation
+
+Full KDoc API documentation is available at:
+https://kotlin.sdk.modelcontextprotocol.io/
+
+## Protocol Specification
+
+For details on the MCP protocol itself, see the [official specification](https://spec.modelcontextprotocol.io/).

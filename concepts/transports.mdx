@@ -1,0 +1,530 @@
+---
+title: Transports
+description: Communication protocols for MCP - STDIO, HTTP, SSE, and WebSocket
+---
+
+Transports provide the communication layer between MCP clients and servers. The Kotlin SDK supports multiple transport protocols, each suited for different deployment scenarios.
+
+## Overview
+
+All transports share the same API surface, allowing you to change deployment style without touching business logic. Choose the transport that best matches your deployment environment:
+
+| Transport | Use Case | Pros | Cons |
+|-----------|----------|------|------|
+| **STDIO** | Local processes, CLI tools, editor plugins | Simple, no networking setup | Local only |
+| **Streamable HTTP** | Remote servers, production deployments | REST-friendly, proxy-compatible | More complex |
+| **SSE** | Backwards compatibility | Widely supported | Deprecated in favor of Streamable HTTP |
+| **WebSocket** | Real-time, bidirectional | Low latency, full-duplex | Requires WebSocket support |
+
+<Note>
+**Recommended:** Use **Streamable HTTP** for new remote deployments and **STDIO** for local integrations.
+</Note>
+
+## STDIO Transport
+
+STDIO transport tunnels MCP messages over standard input/output streams. Perfect for:
+
+- Editor plugins that spawn helper processes
+- CLI tooling
+- Local development
+- Scenarios where networking is unavailable
+
+### Client Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import kotlinx.io.asSource
+import kotlinx.io.asSink
+import kotlinx.io.buffered
+
+val process = ProcessBuilder("mcp-server").start()
+
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource().buffered(),
+    output = process.outputStream.asSink().buffered(),
+    error = process.errorStream.asSource().buffered()
+) { stderrLine ->
+    when {
+        stderrLine.contains("error", ignoreCase = true) -> 
+            StdioClientTransport.StderrSeverity.FATAL
+        stderrLine.contains("warning", ignoreCase = true) -> 
+            StdioClientTransport.StderrSeverity.WARNING
+        else -> 
+            StdioClientTransport.StderrSeverity.INFO
+    }
+}
+
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0")
+)
+
+client.connect(transport)
+```
+
+### Server Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import kotlinx.io.asSource
+import kotlinx.io.asSink
+import kotlinx.io.buffered
+
+val server = Server(
+    serverInfo = Implementation("my-server", "1.0.0"),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools()
+        )
+    )
+)
+
+val transport = StdioServerTransport(
+    inputStream = System.`in`.asSource().buffered(),
+    outputStream = System.out.asSink().buffered()
+)
+
+server.connect(transport)
+```
+
+### Stderr Handling
+
+The STDIO transport provides configurable stderr monitoring:
+
+```kotlin
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource().buffered(),
+    output = process.outputStream.asSink().buffered(),
+    error = process.errorStream.asSource().buffered()
+) { stderrLine ->
+    // Classify each stderr line
+    when {
+        stderrLine.contains("FATAL") -> 
+            StderrSeverity.FATAL        // Fail transport
+        stderrLine.contains("ERROR") -> 
+            StderrSeverity.WARNING      // Log as warning
+        stderrLine.contains("DEBUG") -> 
+            StderrSeverity.DEBUG        // Log as debug
+        stderrLine.startsWith("#") -> 
+            StderrSeverity.IGNORE       // Discard
+        else -> 
+            StderrSeverity.INFO         // Log as info
+    }
+}
+```
+
+## Streamable HTTP Transport
+
+Streamable HTTP is the **recommended transport** for remote deployments. It exposes MCP over a single HTTP endpoint with:
+
+- POST requests for sending messages
+- GET requests with SSE streaming for receiving messages
+- Optional JSON-only responses
+- Session management and resumption support
+
+### Client Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+
+val httpClient = HttpClient {
+    install(SSE)
+}
+
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp"
+)
+
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0")
+)
+
+client.connect(transport)
+
+// List tools
+val tools = client.listTools().tools
+println(tools)
+```
+
+### Server Example (Stateful)
+
+Stateful sessions maintain connection state:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
+
+embeddedServer(CIO, port = 3000) {
+    mcpStreamableHttp(path = "/mcp") {
+        Server(
+            serverInfo = Implementation("my-server", "1.0.0"),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    tools = ServerCapabilities.Tools()
+                )
+            )
+        )
+    }
+}.start(wait = true)
+```
+
+### Server Example (Stateless)
+
+Stateless mode creates a new server instance per message:
+
+```kotlin
+embeddedServer(CIO, port = 3000) {
+    mcpStatelessStreamableHttp(path = "/api/mcp") {
+        Server(
+            serverInfo = Implementation("stateless-server", "1.0.0"),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    resources = ServerCapabilities.Resources()
+                )
+            )
+        )
+    }
+}.start(wait = true)
+```
+
+### Custom Path
+
+Mount the MCP endpoint at any URL:
+
+```kotlin
+embeddedServer(CIO, port = 3000) {
+    mcpStreamableHttp(path = "/api/v1/mcp") {
+        MyServer()
+    }
+}.start(wait = true)
+```
+
+Clients connect to `http://localhost:3000/api/v1/mcp`.
+
+### Session Management
+
+Streamable HTTP supports session resumption:
+
+```kotlin
+// Client automatically handles sessions
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp"
+)
+
+// Access session ID after connection
+val sessionId = transport.sessionId
+println("Connected with session: $sessionId")
+```
+
+## SSE Transport
+
+Server-Sent Events transport is available for backwards compatibility with older MCP clients. **Prefer Streamable HTTP for new projects.**
+
+### Client Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
+
+val httpClient = HttpClient {
+    install(SSE)
+}
+
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "http://localhost:3000/sse"
+)
+
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0")
+)
+
+client.connect(transport)
+```
+
+### Server Example (Application-level)
+
+Automatic SSE plugin installation:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+embeddedServer(CIO, port = 3000) {
+    mcp {
+        Server(
+            serverInfo = Implementation("my-server", "1.0.0"),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    tools = ServerCapabilities.Tools()
+                )
+            )
+        )
+    }
+}.start(wait = true)
+```
+
+### Server Example (Route-level)
+
+Manual SSE plugin installation for custom routing:
+
+```kotlin
+import io.ktor.server.application.install
+import io.ktor.server.routing.routing
+import io.ktor.server.routing.route
+import io.ktor.server.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+embeddedServer(CIO, port = 3000) {
+    install(SSE)
+
+    routing {
+        route("/api/mcp") {
+            mcp { MyServer() }
+        }
+        
+        route("/health") {
+            get { call.respondText("OK") }
+        }
+    }
+}.start(wait = true)
+```
+
+## WebSocket Transport
+
+WebSocket provides full-duplex, low-latency connections. Useful for:
+
+- Real-time applications
+- Long-running sessions
+- High-frequency messaging
+- Scenarios behind reverse proxies with WebSocket support
+
+### Client Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.WebSockets
+import io.modelcontextprotocol.kotlin.sdk.client.WebSocketClientTransport
+
+val httpClient = HttpClient {
+    install(WebSockets)
+}
+
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "ws://localhost:3000/ws"
+)
+
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0")
+)
+
+client.connect(transport)
+```
+
+### Server Example
+
+```kotlin
+import io.ktor.server.application.install
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+embeddedServer(CIO, port = 3000) {
+    install(WebSockets)
+
+    routing {
+        mcp("/ws") {
+            Server(
+                serverInfo = Implementation("ws-server", "1.0.0"),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools()
+                    )
+                )
+            )
+        }
+    }
+}.start(wait = true)
+```
+
+### WebSocket Subprotocol
+
+MCP uses the `mcp` WebSocket subprotocol:
+
+```kotlin
+// Automatically handled by WebSocketClientTransport
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "ws://localhost:3000/ws"
+) {
+    // Custom request configuration
+    header("Authorization", "Bearer token")
+}
+```
+
+## Testing Transport
+
+For testing and local development, use `ChannelTransport`:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.testing.ChannelTransport
+
+val (clientTransport, serverTransport) = ChannelTransport.createPair()
+
+// Use in tests
+val client = Client(clientInfo = Implementation("test", "1.0"))
+client.connect(clientTransport)
+
+val server = Server(
+    serverInfo = Implementation("test-server", "1.0"),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools()
+        )
+    )
+)
+server.connect(serverTransport)
+```
+
+## Authentication
+
+All HTTP-based transports support custom request configuration:
+
+### Bearer Token
+
+```kotlin
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "https://api.example.com/mcp"
+) {
+    header("Authorization", "Bearer ${apiKey}")
+}
+```
+
+### Custom Headers
+
+```kotlin
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "https://api.example.com/sse"
+) {
+    header("X-API-Key", apiKey)
+    header("X-Client-Version", "1.0.0")
+}
+```
+
+### Basic Auth
+
+```kotlin
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://api.example.com/ws"
+) {
+    val credentials = "${username}:${password}".encodeBase64()
+    header("Authorization", "Basic $credentials")
+}
+```
+
+## Choosing a Transport
+
+<CardGroup cols={2}>
+  <Card title="Local Integration" icon="terminal">
+    Use **STDIO** for editor plugins, CLI tools, and local processes
+  </Card>
+  <Card title="Remote Deployment" icon="cloud">
+    Use **Streamable HTTP** for production servers and cloud deployments
+  </Card>
+  <Card title="Real-time Apps" icon="bolt">
+    Use **WebSocket** for low-latency, bidirectional communication
+  </Card>
+  <Card title="Testing" icon="vial">
+    Use **ChannelTransport** for unit and integration tests
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+### Error Handling
+
+All transports can fail - handle errors gracefully:
+
+```kotlin
+try {
+    client.connect(transport)
+} catch (e: Exception) {
+    when (e) {
+        is IOException -> println("Network error: ${e.message}")
+        is TimeoutException -> println("Connection timeout")
+        else -> println("Unexpected error: ${e.message}")
+    }
+}
+```
+
+### Resource Management
+
+Always close transports and clients:
+
+```kotlin
+try {
+    client.connect(transport)
+    // Use client
+} finally {
+    client.close()
+    transport.close()
+}
+```
+
+### Timeouts
+
+Configure appropriate timeouts for your use case:
+
+```kotlin
+val httpClient = HttpClient {
+    install(SSE)
+    install(HttpTimeout) {
+        requestTimeoutMillis = 30_000
+        connectTimeoutMillis = 10_000
+    }
+}
+```
+
+### Reconnection
+
+Implement reconnection logic for network transports:
+
+```kotlin
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = url,
+    reconnectionTime = 5.seconds  // Automatic SSE reconnection
+)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first client and server
+  </Card>
+  <Card title="Server Guide" icon="server" href="/server/getting-started">
+    Create a server with your chosen transport
+  </Card>
+  <Card title="Client Guide" icon="desktop" href="/client/getting-started">
+    Build a client with transport configuration
+  </Card>
+  <Card title="API Reference" icon="code" href="https://kotlin.sdk.modelcontextprotocol.io/">
+    Explore transport API documentation
+  </Card>
+</CardGroup>

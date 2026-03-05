@@ -1,0 +1,493 @@
+---
+title: Client Transports
+description: Transport implementations for MCP clients
+---
+
+The SDK provides several transport implementations for client-side MCP communication. Each transport is optimized for different connection scenarios.
+
+## Available Transports
+
+<CardGroup cols={2}>
+  <Card title="STDIO" icon="terminal" href="#stdio">
+    Standard input/output for subprocess communication
+  </Card>
+  <Card title="SSE" icon="satellite-dish" href="#sse">
+    Server-Sent Events for web applications
+  </Card>
+  <Card title="WebSocket" icon="signal-stream" href="#websocket">
+    Bidirectional WebSocket connections
+  </Card>
+  <Card title="StreamableHTTP" icon="globe" href="#streamable-http">
+    HTTP with streaming support
+  </Card>
+</CardGroup>
+
+## STDIO
+
+### StdioClientTransport
+
+Communicates with a subprocess via standard input/output streams. Ideal for spawning MCP server processes.
+
+```kotlin
+class StdioClientTransport(
+    private val input: Source,
+    private val output: Sink,
+    private val error: Source? = null,
+    private val sendChannel: Channel<JSONRPCMessage> = Channel(Channel.BUFFERED),
+    private val classifyStderr: (String) -> StderrSeverity = { StderrSeverity.DEBUG }
+) : AbstractClientTransport()
+```
+
+<ParamField path="input" type="Source" required>
+  Input source for reading server messages (stdout of subprocess)
+</ParamField>
+
+<ParamField path="output" type="Sink" required>
+  Output sink for writing client messages (stdin of subprocess)
+</ParamField>
+
+<ParamField path="error" type="Source">
+  Optional error stream for monitoring stderr
+</ParamField>
+
+<ParamField path="classifyStderr" type="(String) -> StderrSeverity">
+  Function to classify stderr message severity
+</ParamField>
+
+**Stderr Severity Levels:**
+
+```kotlin
+enum class StderrSeverity {
+    FATAL,    // Terminates transport
+    WARNING,  // Logs at WARN level
+    INFO,     // Logs at INFO level
+    DEBUG,    // Logs at DEBUG level
+    IGNORE    // Discards silently
+}
+```
+
+**Example:**
+
+```kotlin
+import kotlinx.io.asSource
+import kotlinx.io.asSink
+
+val process = ProcessBuilder("mcp-server", "--config", "config.json")
+    .redirectError(ProcessBuilder.Redirect.PIPE)
+    .start()
+
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource(),
+    output = process.outputStream.asSink(),
+    error = process.errorStream.asSource()
+) { stderrLine ->
+    when {
+        stderrLine.contains("FATAL", ignoreCase = true) -> StderrSeverity.FATAL
+        stderrLine.contains("ERROR", ignoreCase = true) -> StderrSeverity.WARNING
+        stderrLine.contains("INFO", ignoreCase = true) -> StderrSeverity.INFO
+        else -> StderrSeverity.DEBUG
+    }
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+**Use Cases:**
+- Spawning local MCP servers
+- CLI tool integration
+- Process-based isolation
+- Local development
+
+## SSE
+
+### SseClientTransport
+
+Connects to a server using Server-Sent Events for receiving messages and HTTP POST for sending.
+
+```kotlin
+class SseClientTransport(
+    private val client: HttpClient,
+    private val urlString: String?,
+    private val reconnectionTime: Duration? = null,
+    private val requestBuilder: HttpRequestBuilder.() -> Unit = {}
+) : AbstractClientTransport()
+```
+
+<ParamField path="client" type="HttpClient" required>
+  Ktor HTTP client instance
+</ParamField>
+
+<ParamField path="urlString" type="String">
+  Optional URL of the SSE endpoint
+</ParamField>
+
+<ParamField path="reconnectionTime" type="Duration">
+  Time to wait before reconnecting on disconnect
+</ParamField>
+
+<ParamField path="requestBuilder" type="HttpRequestBuilder.() -> Unit">
+  Lambda to configure HTTP requests
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.sse.*
+import kotlin.time.Duration.Companion.seconds
+
+val httpClient = HttpClient(CIO) {
+    install(SSE)
+}
+
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "https://example.com/mcp/sse",
+    reconnectionTime = 5.seconds
+) {
+    headers {
+        append("Authorization", "Bearer $token")
+    }
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+**Message Flow:**
+
+1. Client connects to SSE endpoint (GET request)
+2. Server sends "endpoint" event with POST URL
+3. Client POSTs messages to that URL
+4. Server sends responses/notifications via SSE events
+
+**Use Cases:**
+- Browser-based applications
+- Web dashboards
+- Server push scenarios
+- Firewall-friendly connections
+
+## WebSocket
+
+### WebSocketClientTransport
+
+Bidirectional WebSocket transport using Ktor client.
+
+```kotlin
+class WebSocketClientTransport(
+    private val client: HttpClient,
+    private val urlString: String?,
+    private val requestBuilder: HttpRequestBuilder.() -> Unit = {}
+) : AbstractClientTransport()
+```
+
+<ParamField path="client" type="HttpClient" required>
+  Ktor HTTP client with WebSocket support
+</ParamField>
+
+<ParamField path="urlString" type="String">
+  Optional WebSocket URL
+</ParamField>
+
+<ParamField path="requestBuilder" type="HttpRequestBuilder.() -> Unit">
+  Lambda to configure the WebSocket request
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.websocket.*
+
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://example.com/mcp"
+) {
+    headers {
+        append("Authorization", "Bearer $token")
+    }
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+**Use Cases:**
+- Real-time applications
+- Low-latency requirements
+- Interactive tools
+- Bidirectional streaming
+
+## StreamableHTTP
+
+### StreamableHttpClientTransport
+
+HTTP transport with streaming support for long-running requests.
+
+```kotlin
+class StreamableHttpClientTransport(
+    private val client: HttpClient,
+    private val urlString: String,
+    private val requestBuilder: HttpRequestBuilder.() -> Unit = {}
+) : AbstractClientTransport()
+```
+
+<ParamField path="client" type="HttpClient" required>
+  Ktor HTTP client
+</ParamField>
+
+<ParamField path="urlString" type="String" required>
+  HTTP endpoint URL
+</ParamField>
+
+<ParamField path="requestBuilder" type="HttpRequestBuilder.() -> Unit">
+  Lambda to configure HTTP requests
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+
+val httpClient = HttpClient(CIO)
+
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    urlString = "https://example.com/mcp"
+) {
+    timeout {
+        requestTimeoutMillis = 60000
+    }
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+**Use Cases:**
+- RESTful API integration
+- HTTP-based infrastructure
+- Progress updates
+- Long-polling scenarios
+
+## Transport Comparison
+
+| Transport | Bidirectional | Streaming | Subprocess Support | Complexity |
+|-----------|---------------|-----------|-------------------|------------|
+| STDIO | Yes | Yes | Yes | Low |
+| SSE | No (POST for client→server) | Yes | No | Medium |
+| WebSocket | Yes | Yes | No | Medium |
+| StreamableHTTP | No | Yes | No | Medium |
+
+## Choosing a Transport
+
+### Use STDIO when:
+- Spawning MCP servers as subprocesses
+- CLI tool integration
+- Local machine communication
+- Process isolation needed
+
+### Use SSE when:
+- Server pushes updates frequently
+- Browser compatibility critical
+- Firewall traversal needed
+- One-way streaming sufficient
+
+### Use WebSocket when:
+- Real-time bidirectional needed
+- Low latency critical
+- Interactive applications
+- Full-duplex required
+
+### Use StreamableHTTP when:
+- RESTful integration
+- HTTP infrastructure only
+- Progress updates needed
+- Request/response pattern sufficient
+
+## Common Patterns
+
+### Subprocess with Error Handling
+
+```kotlin
+val process = ProcessBuilder("mcp-server")
+    .redirectError(ProcessBuilder.Redirect.PIPE)
+    .start()
+
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource(),
+    output = process.outputStream.asSink(),
+    error = process.errorStream.asSource()
+) { line ->
+    when {
+        line.startsWith("FATAL:") -> StderrSeverity.FATAL
+        line.startsWith("ERROR:") -> StderrSeverity.WARNING
+        line.startsWith("WARN:") -> StderrSeverity.WARNING
+        line.startsWith("INFO:") -> StderrSeverity.INFO
+        else -> StderrSeverity.DEBUG
+    }
+}
+
+transport.onError { error ->
+    logger.error("Transport error", error)
+    process.destroy()
+}
+
+transport.onClose {
+    process.destroy()
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+### WebSocket with Authentication
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+val transport = WebSocketClientTransport(
+    client = httpClient,
+    urlString = "wss://api.example.com/mcp"
+) {
+    headers {
+        append("Authorization", "Bearer ${getAuthToken()}")
+        append("X-Client-Version", "1.0.0")
+    }
+}
+
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+### SSE with Retry Logic
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(SSE)
+}
+
+suspend fun connectWithRetry() {
+    var attempts = 0
+    val maxAttempts = 3
+    
+    while (attempts < maxAttempts) {
+        try {
+            val transport = SseClientTransport(
+                client = httpClient,
+                urlString = "https://api.example.com/mcp/sse",
+                reconnectionTime = 5.seconds
+            )
+            
+            val client = Client(clientInfo, options)
+            client.connect(transport)
+            
+            println("Connected successfully")
+            break
+        } catch (e: Exception) {
+            attempts++
+            if (attempts >= maxAttempts) {
+                throw e
+            }
+            println("Connection failed, retrying in 5 seconds...")
+            delay(5000)
+        }
+    }
+}
+```
+
+### Transport Switching
+
+```kotlin
+fun createTransport(type: String): Transport {
+    return when (type) {
+        "stdio" -> StdioClientTransport(
+            input = process.inputStream.asSource(),
+            output = process.outputStream.asSink()
+        )
+        
+        "websocket" -> WebSocketClientTransport(
+            client = httpClient,
+            urlString = "wss://example.com/mcp"
+        )
+        
+        "sse" -> SseClientTransport(
+            client = httpClient,
+            urlString = "https://example.com/mcp/sse"
+        )
+        
+        else -> error("Unknown transport type: $type")
+    }
+}
+
+val transport = createTransport(config.transportType)
+val client = Client(clientInfo, options)
+client.connect(transport)
+```
+
+## Progress Tracking
+
+All transports support progress tracking:
+
+```kotlin
+val result = client.callTool(
+    name = "process_large_file",
+    arguments = mapOf("file" to "large_data.csv"),
+    options = RequestOptions(
+        onProgress = { progress ->
+            val percent = if (progress.total != null) {
+                (progress.progress / progress.total * 100).toInt()
+            } else {
+                progress.progress.toInt()
+            }
+            println("Progress: $percent%${progress.message?.let { " - $it" } ?: ""}")
+        }
+    )
+)
+```
+
+## Error Handling
+
+Handle transport-specific errors:
+
+```kotlin
+transport.onError { error ->
+    when (error) {
+        is IOException -> {
+            logger.error("I/O error", error)
+            // Attempt reconnection
+        }
+        is SerializationException -> {
+            logger.error("Invalid message format", error)
+        }
+        is McpException -> {
+            logger.error("MCP protocol error: ${error.code}", error)
+        }
+        else -> {
+            logger.error("Unexpected error", error)
+        }
+    }
+}
+
+transport.onClose {
+    logger.info("Connection closed")
+    // Cleanup
+}
+```
+
+## See Also
+
+- [Client](/api/client/client) - Client implementation
+- [Transport](/api/core/transport) - Base transport interface
+- [Ktor Client Extensions](/api/client/ktor-extensions) - Ktor integration helpers
+- [Dokka: Client Transports](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/index.html)

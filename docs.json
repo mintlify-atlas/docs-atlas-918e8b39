@@ -1,122 +1,128 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "MCP Kotlin SDK",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#7F52FF",
+    "light": "#A78BFF",
+    "dark": "#6537E0"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/modelcontextprotocol/kotlin-sdk"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/modelcontextprotocol/kotlin-sdk"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Getting Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/overview",
+              "concepts/mcp-primitives",
+              "concepts/capabilities",
+              "concepts/transports"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Building Servers",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "server/getting-started",
+              "server/prompts",
+              "server/resources",
+              "server/tools",
+              "server/completion",
+              "server/logging",
+              "server/pagination"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Building Clients",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "client/getting-started",
+              "client/roots",
+              "client/sampling"
+            ]
+          },
+          {
+            "group": "Transport Guides",
+            "pages": [
+              "transports/stdio",
+              "transports/streamable-http",
+              "transports/sse",
+              "transports/websocket",
+              "transports/testing"
+            ]
+          },
+          {
+            "group": "Examples & Advanced",
+            "pages": [
+              "examples/overview",
+              "advanced/multiplatform",
+              "advanced/ktor-integration"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Overview",
             "pages": [
-              "api-reference/introduction"
+              "api/overview"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Core Module",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/core/types",
+              "api/core/protocol",
+              "api/core/transport",
+              "api/core/json-utils"
+            ]
+          },
+          {
+            "group": "Server Module",
+            "pages": [
+              "api/server/server",
+              "api/server/session",
+              "api/server/transports",
+              "api/server/ktor-extensions"
+            ]
+          },
+          {
+            "group": "Client Module",
+            "pages": [
+              "api/client/client",
+              "api/client/transports",
+              "api/client/ktor-extensions"
+            ]
+          },
+          {
+            "group": "Testing Module",
+            "pages": [
+              "api/testing/channel-transport"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

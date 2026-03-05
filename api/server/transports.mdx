@@ -1,0 +1,384 @@
+---
+title: Server Transports
+description: Transport implementations for MCP servers
+---
+
+The SDK provides several transport implementations for server-side MCP communication. Each transport is optimized for different deployment scenarios.
+
+## Available Transports
+
+<CardGroup cols={2}>
+  <Card title="STDIO" icon="terminal" href="#stdio">
+    Standard input/output for CLI applications
+  </Card>
+  <Card title="SSE" icon="satellite-dish" href="#sse">
+    Server-Sent Events for web applications
+  </Card>
+  <Card title="WebSocket" icon="signal-stream" href="#websocket">
+    Bidirectional WebSocket connections
+  </Card>
+  <Card title="StreamableHTTP" icon="globe" href="#streamable-http">
+    HTTP with streaming support
+  </Card>
+</CardGroup>
+
+## STDIO
+
+### StdioServerTransport
+
+Communicates via standard input/output streams. Ideal for command-line MCP servers.
+
+```kotlin
+class StdioServerTransport(
+    private val inputStream: Source,
+    outputStream: Sink
+) : AbstractTransport()
+```
+
+<ParamField path="inputStream" type="Source" required>
+  Input source for reading JSON-RPC messages
+</ParamField>
+
+<ParamField path="outputStream" type="Sink" required>
+  Output sink for writing JSON-RPC messages
+</ParamField>
+
+**Example:**
+
+```kotlin
+import kotlinx.io.asSource
+import kotlinx.io.asSink
+
+val transport = StdioServerTransport(
+    inputStream = System.`in`.asSource(),
+    outputStream = System.out.asSink()
+)
+
+val server = Server(serverInfo, options)
+server.createSession(transport)
+```
+
+**Message Format:**
+
+Messages are newline-delimited JSON:
+
+```
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}
+```
+
+**Use Cases:**
+- CLI tools
+- Process spawning
+- Local development
+- System utilities
+
+## SSE
+
+### SseServerTransport
+
+Server-Sent Events transport for Ktor server applications. Sends messages over SSE and receives via HTTP POST.
+
+```kotlin
+class SseServerTransport(
+    private val endpoint: String,
+    private val session: ServerSSESession
+) : AbstractTransport()
+```
+
+<ParamField path="endpoint" type="String" required>
+  The endpoint URL where clients should POST messages (relative or absolute)
+</ParamField>
+
+<ParamField path="session" type="ServerSSESession" required>
+  Ktor SSE session for sending events
+</ParamField>
+
+**Properties:**
+
+<ResponseField name="sessionId" type="String">
+  Unique session identifier (UUID)
+</ResponseField>
+
+**Methods:**
+
+```kotlin
+suspend fun handlePostMessage(call: ApplicationCall)
+```
+
+Handles incoming POST messages. Call this from your POST endpoint handler.
+
+```kotlin
+suspend fun handleMessage(message: String)
+```
+
+Processes a message string directly (for alternative message delivery).
+
+**Example:**
+
+```kotlin
+import io.ktor.server.application.*
+import io.ktor.server.routing.*
+import io.ktor.server.sse.*
+import io.modelcontextprotocol.kotlin.sdk.server.*
+
+routing {
+    // SSE endpoint for receiving events
+    sse("/mcp/sse") {
+        val transport = SseServerTransport(
+            endpoint = "/mcp/message",
+            session = this
+        )
+        val server = Server(serverInfo, options)
+        val session = server.createSession(transport)
+        
+        // Keep connection open
+        awaitCancellation()
+    }
+    
+    // POST endpoint for sending messages
+    post("/mcp/message") {
+        val sessionId = call.request.queryParameters["sessionId"]
+        val transport = getTransportForSession(sessionId)
+        transport?.handlePostMessage(call)
+    }
+}
+```
+
+**Message Flow:**
+
+1. Client connects to SSE endpoint (GET /mcp/sse)
+2. Server sends "endpoint" event with POST URL
+3. Client POSTs messages to that URL
+4. Server sends responses/notifications via SSE events
+
+**Use Cases:**
+- Web applications
+- Browser-based clients
+- Serverless functions
+- RESTful APIs
+
+## WebSocket
+
+### WebSocketMcpServerTransport
+
+Bidirectional WebSocket transport for Ktor server applications.
+
+```kotlin
+class WebSocketMcpServerTransport(
+    private val session: WebSocketServerSession
+) : AbstractTransport()
+```
+
+<ParamField path="session" type="WebSocketServerSession" required>
+  Ktor WebSocket session
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.server.application.*
+import io.ktor.server.routing.*
+import io.ktor.server.websocket.*
+import io.modelcontextprotocol.kotlin.sdk.server.*
+
+routing {
+    webSocket("/mcp") {
+        val transport = WebSocketMcpServerTransport(this)
+        val server = Server(serverInfo, options)
+        val session = server.createSession(transport)
+        
+        // Keep connection open
+        awaitCancellation()
+    }
+}
+```
+
+**Message Format:**
+
+JSON text frames:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+```
+
+**Use Cases:**
+- Real-time applications
+- Interactive tools
+- Low-latency requirements
+- Full-duplex communication
+
+## StreamableHTTP
+
+### StreamableHttpServerTransport
+
+HTTP transport with streaming support for long-running requests.
+
+```kotlin
+class StreamableHttpServerTransport(
+    private val call: ApplicationCall
+) : AbstractTransport()
+```
+
+<ParamField path="call" type="ApplicationCall" required>
+  Ktor application call
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.server.application.*
+import io.ktor.server.routing.*
+import io.modelcontextprotocol.kotlin.sdk.server.*
+
+routing {
+    post("/mcp") {
+        val transport = StreamableHttpServerTransport(call)
+        val server = Server(serverInfo, options)
+        val session = server.createSession(transport)
+        
+        // Process request and stream response
+        transport.handleRequest()
+    }
+}
+```
+
+**Use Cases:**
+- HTTP-based APIs
+- Streaming responses
+- Progress updates
+- Long-running operations
+
+## Transport Comparison
+
+| Transport | Bidirectional | Streaming | Browser Support | Complexity |
+|-----------|---------------|-----------|-----------------|------------|
+| STDIO | Yes | Yes | No | Low |
+| SSE | No (POST for client→server) | Yes | Yes | Medium |
+| WebSocket | Yes | Yes | Yes | Medium |
+| StreamableHTTP | No | Yes | Yes | Medium |
+
+## Choosing a Transport
+
+### Use STDIO when:
+- Building CLI tools
+- Spawning server processes
+- Local development
+- System integration
+
+### Use SSE when:
+- Server pushes updates frequently
+- Browser compatibility is critical
+- Firewall traversal needed
+- One-way streaming preferred
+
+### Use WebSocket when:
+- Real-time bidirectional communication needed
+- Low latency is critical
+- Interactive applications
+- Push notifications required
+
+### Use StreamableHTTP when:
+- RESTful API integration
+- Progress updates needed
+- Simple HTTP infrastructure
+- Request/response pattern sufficient
+
+## Common Patterns
+
+### Multiple Transports
+
+Support multiple transports simultaneously:
+
+```kotlin
+val server = Server(serverInfo, options)
+
+// STDIO transport
+launch {
+    val stdioTransport = StdioServerTransport(
+        System.`in`.asSource(),
+        System.out.asSink()
+    )
+    server.createSession(stdioTransport)
+}
+
+// WebSocket transport
+embeddedServer(Netty, port = 8080) {
+    install(WebSockets)
+    routing {
+        webSocket("/mcp") {
+            val wsTransport = WebSocketMcpServerTransport(this)
+            server.createSession(wsTransport)
+            awaitCancellation()
+        }
+    }
+}.start(wait = true)
+```
+
+### Session Management
+
+Track multiple sessions:
+
+```kotlin
+val sessions = mutableMapOf<String, ServerSession>()
+
+webSocket("/mcp") {
+    val transport = WebSocketMcpServerTransport(this)
+    val session = server.createSession(transport)
+    
+    sessions[session.sessionId] = session
+    
+    session.onClose {
+        sessions.remove(session.sessionId)
+    }
+    
+    awaitCancellation()
+}
+```
+
+### Broadcast to All Sessions
+
+```kotlin
+suspend fun broadcast(notification: Notification) {
+    server.sessions.values.forEach { session ->
+        try {
+            session.notification(notification)
+        } catch (e: Exception) {
+            logger.error("Failed to send to ${session.sessionId}", e)
+        }
+    }
+}
+
+// Broadcast a resource update
+broadcast(
+    ResourceUpdatedNotification(
+        ResourceUpdatedNotificationParams(uri = "file:///data.json")
+    )
+)
+```
+
+## Error Handling
+
+All transports handle errors through the transport callbacks:
+
+```kotlin
+transport.onError { error ->
+    when (error) {
+        is IOException -> logger.error("I/O error", error)
+        is SerializationException -> logger.error("Invalid message", error)
+        else -> logger.error("Transport error", error)
+    }
+}
+
+transport.onClose {
+    logger.info("Connection closed")
+    cleanup()
+}
+```
+
+## See Also
+
+- [Server](/api/server/server) - Server implementation
+- [Ktor Extensions](/api/server/ktor-extensions) - Ktor integration helpers
+- [Transport](/api/core/transport) - Base transport interface
+- [Dokka: Server Transports](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/index.html)

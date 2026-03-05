@@ -1,0 +1,245 @@
+---
+title: "Roots"
+description: "Expose file system roots to MCP servers"
+---
+
+## Overview
+
+Roots allow MCP clients to declare which directories the server is allowed to access. This provides a security boundary, ensuring servers only operate within authorized filesystem locations.
+
+<Note>
+  Root URIs **must** use the `file://` scheme. Only file system paths are supported.
+</Note>
+
+## Declaring Root Capability
+
+To use roots, declare the `roots` capability when creating your client:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
+import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+
+val client = Client(
+    clientInfo = Implementation("demo-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            roots = ClientCapabilities.Roots(listChanged = true)
+        ),
+    ),
+)
+```
+
+<ParamField path="roots" type="ClientCapabilities.Roots">
+  Enables the roots capability
+  
+  <ParamField path="roots.listChanged" type="Boolean" default="false">
+    Whether the client will emit `notifications/roots/list_changed` when roots change
+  </ParamField>
+</ParamField>
+
+## Adding Roots
+
+### Adding a Single Root
+
+Use `addRoot()` to register a single directory:
+
+```kotlin
+client.addRoot(
+    uri = "file:///Users/demo/projects",
+    name = "Projects",
+)
+```
+
+<ParamField path="uri" type="String" required>
+  The file:// URI of the directory. Must be an absolute path.
+</ParamField>
+
+<ParamField path="name" type="String" required>
+  A human-readable name for this root (e.g., "Home Directory", "Workspace")
+</ParamField>
+
+### Adding Multiple Roots
+
+Use `addRoots()` to register multiple directories at once:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.Root
+
+client.addRoots(
+    listOf(
+        Root(uri = "file:///Users/demo/projects", name = "Projects"),
+        Root(uri = "file:///Users/demo/documents", name = "Documents"),
+        Root(uri = "file:///Users/demo/workspace", name = "Workspace"),
+    )
+)
+```
+
+## Removing Roots
+
+### Removing a Single Root
+
+Remove a root by its URI:
+
+```kotlin
+val removed = client.removeRoot("file:///Users/demo/projects")
+if (removed) {
+    println("Root removed successfully")
+} else {
+    println("Root not found")
+}
+```
+
+<ParamField path="uri" type="String" required>
+  The URI of the root to remove
+</ParamField>
+
+<ResponseField name="return" type="Boolean">
+  Returns `true` if the root was removed, `false` if it wasn't found
+</ResponseField>
+
+### Removing Multiple Roots
+
+Remove multiple roots at once:
+
+```kotlin
+val uris = listOf(
+    "file:///Users/demo/projects",
+    "file:///Users/demo/documents"
+)
+
+val removedCount = client.removeRoots(uris)
+println("Removed $removedCount roots")
+```
+
+<ResponseField name="return" type="Int">
+  Returns the number of roots that were successfully removed
+</ResponseField>
+
+## Notifying Root Changes
+
+When you modify the root list, notify the server by sending a roots list changed notification:
+
+```kotlin
+client.addRoot(
+    uri = "file:///Users/demo/projects",
+    name = "Projects",
+)
+client.sendRootsListChanged()
+```
+
+<Note>
+  Only call `sendRootsListChanged()` if you declared `listChanged = true` in your capabilities. The server must also support receiving this notification.
+</Note>
+
+## Complete Example
+
+Here's a complete example managing roots dynamically:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.Root
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+fun main() = runBlocking {
+    // Create client with roots capability
+    val client = Client(
+        clientInfo = Implementation("demo-client", "1.0.0"),
+        options = ClientOptions(
+            capabilities = ClientCapabilities(
+                roots = ClientCapabilities.Roots(listChanged = true)
+            ),
+        ),
+    )
+    
+    // Connect to server
+    val process = ProcessBuilder("path/to/server").start()
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource().buffered(),
+        output = process.outputStream.asSink().buffered(),
+    )
+    client.connect(transport)
+    
+    // Add initial roots
+    client.addRoots(
+        listOf(
+            Root(uri = "file:///Users/demo/projects", name = "Projects"),
+            Root(uri = "file:///Users/demo/workspace", name = "Workspace"),
+        )
+    )
+    client.sendRootsListChanged()
+    
+    // Later: add a new root
+    client.addRoot(
+        uri = "file:///Users/demo/documents",
+        name = "Documents"
+    )
+    client.sendRootsListChanged()
+    
+    // Later: revoke access to a root
+    val removed = client.removeRoot("file:///Users/demo/workspace")
+    if (removed) {
+        client.sendRootsListChanged()
+    }
+}
+```
+
+## Root Handling by the Server
+
+When the server needs to know what roots are available, it will send a `roots/list` request. The client automatically handles this request by returning the current list of registered roots.
+
+You don't need to implement the `roots/list` handler yourself - it's built into the `Client` class when you enable the roots capability.
+
+## Security Best Practices
+
+<Warning>
+  Always keep root lists under user control. Never automatically grant access to sensitive directories without explicit user permission.
+</Warning>
+
+- **User authorization**: Always require user approval before adding roots
+- **Least privilege**: Only expose directories the server actually needs
+- **Revocation**: Provide users a way to remove roots at any time
+- **Validation**: Ensure root URIs are valid file:// paths before adding
+- **Sensitive directories**: Be cautious about exposing home directories, system folders, or directories containing credentials
+
+## API Reference
+
+### Client Methods
+
+<ParamField path="client.addRoot" type="(uri: String, name: String) -> Unit">
+  Adds a single root directory
+  
+  Throws `IllegalStateException` if the client doesn't support roots capability
+</ParamField>
+
+<ParamField path="client.addRoots" type="(roots: List<Root>) -> Unit">
+  Adds multiple root directories at once
+  
+  Throws `IllegalStateException` if the client doesn't support roots capability
+</ParamField>
+
+<ParamField path="client.removeRoot" type="(uri: String) -> Boolean">
+  Removes a single root by URI
+  
+  Returns `true` if removed, `false` if not found. Throws `IllegalStateException` if the client doesn't support roots capability
+</ParamField>
+
+<ParamField path="client.removeRoots" type="(uris: List<String>) -> Int">
+  Removes multiple roots by URI
+  
+  Returns the count of roots successfully removed. Throws `IllegalStateException` if the client doesn't support roots capability
+</ParamField>
+
+<ParamField path="client.sendRootsListChanged" type="suspend () -> Unit">
+  Sends a notification to the server that the roots list has changed
+  
+  Should only be called if `listChanged = true` in capabilities
+</ParamField>

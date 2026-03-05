@@ -1,0 +1,472 @@
+---
+title: Tools
+description: Build executable functions that LLMs can invoke
+---
+
+Tools are model-controlled capabilities that LLMs can invoke to perform actions. Clients discover tools, and when the model decides to use one, your handler executes with the provided arguments and returns results.
+
+## When to Use Tools
+
+Tools are ideal for:
+
+- Performing actions (file operations, API calls, database queries)
+- Retrieving information (search, calculations, data lookups)
+- Executing commands or workflows
+- Interacting with external systems
+- Long-running operations with progress reporting
+
+<Warning>
+  Tools are **model-controlled**. The LLM decides when to invoke them. Always keep a human in the loop for sensitive operations like deletions, payments, or data modifications.
+</Warning>
+
+## Enabling Tool Support
+
+Declare the `tools` capability in your server options:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation(
+        name = "example-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools(listChanged = true),
+        ),
+    )
+)
+```
+
+<ParamField path="listChanged" type="boolean" default="false">
+  Set to `true` if your tool catalog can change at runtime. The server will automatically notify all connected clients when tools are added or removed.
+</ParamField>
+
+## Adding Tools
+
+### Simple Tool
+
+Create a basic tool without input schema:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlinx.serialization.json.jsonPrimitive
+
+server.addTool(
+    name = "echo",
+    description = "Return whatever the user sent back to them",
+) { request ->
+    val text = request.arguments?.get("text")?.jsonPrimitive?.content ?: "(empty)"
+    CallToolResult(content = listOf(TextContent(text = "Echo: $text")))
+}
+```
+
+### Tool with Input Schema
+
+Define a JSON schema for tool inputs to help the LLM provide correct arguments:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+server.addTool(
+    name = "add",
+    description = "Add two numbers together",
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            put("a", buildJsonObject {
+                put("type", "number")
+                put("description", "First number")
+            })
+            put("b", buildJsonObject {
+                put("type", "number")
+                put("description", "Second number")
+            })
+        },
+        required = listOf("a", "b")
+    ),
+) { request ->
+    val a = request.arguments?.get("a")?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+    val b = request.arguments?.get("b")?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+    val result = a + b
+    
+    CallToolResult(
+        content = listOf(TextContent(text = "Result: $result"))
+    )
+}
+```
+
+### Tool from Sample
+
+Here's a real example from the kotlin-mcp-server sample:
+
+```kotlin
+server.addTool(
+    name = "kotlin-sdk-tool",
+    description = "A test tool",
+) { _ ->
+    CallToolResult(
+        content = listOf(TextContent("Hello, world!")),
+    )
+}
+```
+
+### Tool with Multiple Content Types
+
+Return multiple content items (text, images, resources):
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
+import io.modelcontextprotocol.kotlin.sdk.types.ResourceContents
+
+server.addTool(
+    name = "generate-report",
+    description = "Generate a report with text and visualizations",
+) { request ->
+    CallToolResult(
+        content = listOf(
+            TextContent(text = "Report generated successfully"),
+            ImageContent(
+                data = "base64-encoded-image-data",
+                mimeType = "image/png"
+            ),
+            ResourceContents(
+                uri = "report://2024-03-15",
+                mimeType = "application/pdf",
+                text = "Full report available at: report://2024-03-15"
+            )
+        )
+    )
+}
+```
+
+## API Signatures
+
+### addTool (detailed)
+
+```kotlin
+fun addTool(
+    name: String,
+    description: String,
+    inputSchema: ToolSchema = ToolSchema(),
+    title: String? = null,
+    outputSchema: ToolSchema? = null,
+    toolAnnotations: ToolAnnotations? = null,
+    meta: JsonObject? = null,
+    handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult
+)
+```
+
+<ParamField path="name" type="String" required>
+  Unique identifier for the tool. Must be unique across all tools in the server.
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Human-readable description of what the tool does. The LLM uses this to decide when to invoke the tool.
+</ParamField>
+
+<ParamField path="inputSchema" type="ToolSchema" default="ToolSchema()">
+  JSON schema describing expected input arguments. Helps the LLM provide correct parameters.
+</ParamField>
+
+<ParamField path="title" type="String">
+  Optional human-readable title for display purposes.
+</ParamField>
+
+<ParamField path="outputSchema" type="ToolSchema">
+  Optional JSON schema describing the tool's output format.
+</ParamField>
+
+<ParamField path="toolAnnotations" type="ToolAnnotations">
+  Optional additional metadata about the tool.
+</ParamField>
+
+<ParamField path="meta" type="JsonObject">
+  Optional metadata as a JSON object.
+</ParamField>
+
+<ParamField path="handler" type="suspend (CallToolRequest) -> CallToolResult" required>
+  Handler function that executes when the tool is called. Receives arguments and returns results.
+</ParamField>
+
+### addTool (with Tool object)
+
+```kotlin
+fun addTool(
+    tool: Tool,
+    handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult
+)
+```
+
+Alternative signature accepting a pre-constructed `Tool` object.
+
+## Managing Tools
+
+### Add Multiple Tools
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.RegisteredTool
+import io.modelcontextprotocol.kotlin.sdk.types.Tool
+
+val tools = listOf(
+    RegisteredTool(
+        tool = Tool(name = "tool1", description = "First tool"),
+        handler = { request -> /* ... */ }
+    ),
+    RegisteredTool(
+        tool = Tool(name = "tool2", description = "Second tool"),
+        handler = { request -> /* ... */ }
+    ),
+)
+
+server.addTools(tools)
+```
+
+### Remove Tools
+
+```kotlin
+// Remove a single tool
+val removed: Boolean = server.removeTool("echo")
+
+// Remove multiple tools
+val count: Int = server.removeTools(listOf("tool1", "tool2"))
+```
+
+<Warning>
+  When you add or remove tools at runtime, the server automatically sends `notifications/tools/list_changed` to all clients if `listChanged = true` in capabilities.
+</Warning>
+
+## Accessing Active Tools
+
+Get a snapshot of all registered tools:
+
+```kotlin
+val activeTools: Map<String, RegisteredTool> = server.tools
+
+activeTools.forEach { (name, registered) ->
+    println("Tool: $name")
+    println("  Description: ${registered.tool.description}")
+    println("  Input schema: ${registered.tool.inputSchema}")
+}
+```
+
+## Error Handling
+
+### Return Errors to LLM
+
+Use the `isError` flag to indicate tool execution failed:
+
+```kotlin
+server.addTool(
+    name = "divide",
+    description = "Divide two numbers",
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            put("a", buildJsonObject { put("type", "number") })
+            put("b", buildJsonObject { put("type", "number") })
+        },
+        required = listOf("a", "b")
+    ),
+) { request ->
+    val a = request.arguments?.get("a")?.jsonPrimitive?.content?.toDoubleOrNull()
+    val b = request.arguments?.get("b")?.jsonPrimitive?.content?.toDoubleOrNull()
+    
+    if (a == null || b == null) {
+        return@addTool CallToolResult(
+            content = listOf(TextContent(text = "Invalid arguments: a and b must be numbers")),
+            isError = true
+        )
+    }
+    
+    if (b == 0.0) {
+        return@addTool CallToolResult(
+            content = listOf(TextContent(text = "Error: Division by zero")),
+            isError = true
+        )
+    }
+    
+    CallToolResult(
+        content = listOf(TextContent(text = "Result: ${a / b}"))
+    )
+}
+```
+
+### Exception Handling
+
+Exceptions are automatically caught and returned as error results:
+
+```kotlin
+server.addTool(
+    name = "fetch-data",
+    description = "Fetch data from an API",
+) { request ->
+    try {
+        val data = fetchFromExternalApi()
+        CallToolResult(
+            content = listOf(TextContent(text = data))
+        )
+    } catch (e: Exception) {
+        // Exception is caught and returned as isError=true
+        CallToolResult(
+            content = listOf(TextContent(text = "Failed to fetch data: ${e.message}")),
+            isError = true
+        )
+    }
+}
+```
+
+## Client Request Flow
+
+<Steps>
+
+### Client Lists Tools
+
+Client calls `tools/list` to discover available tools:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "id": 1
+}
+```
+
+Server responds:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "echo",
+        "description": "Return whatever the user sent back to them",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ]
+  }
+}
+```
+
+### Client Calls Tool
+
+When the LLM decides to use a tool:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "id": 2,
+  "params": {
+    "name": "echo",
+    "arguments": {
+      "text": "Hello, world!"
+    }
+  }
+}
+```
+
+### Server Executes Handler
+
+Your handler is invoked:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Echo: Hello, world!"
+      }
+    ]
+  }
+}
+```
+
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Clear Descriptions" icon="message">
+    Write descriptions that help the LLM understand when and how to use the tool. Include examples if needed.
+  </Card>
+  
+  <Card title="Define Input Schemas" icon="code">
+    Provide detailed JSON schemas for tool inputs. This helps the LLM call your tools correctly.
+  </Card>
+  
+  <Card title="Validate Inputs" icon="shield-check">
+    Always validate arguments before executing operations. Return errors for invalid inputs.
+  </Card>
+  
+  <Card title="Human in the Loop" icon="user">
+    For destructive or sensitive operations, require human approval before executing.
+  </Card>
+</CardGroup>
+
+## Advanced Patterns
+
+### Tool with Progress Reporting
+
+For long-running operations, use the session context to send progress updates:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+server.addTool(
+    name = "process-batch",
+    description = "Process a batch of items",
+) { request ->
+    val items = 100
+    
+    for (i in 1..items) {
+        // Process item
+        processItem(i)
+        
+        // Send progress update
+        if (i % 10 == 0) {
+            sendLoggingMessage(
+                LoggingMessageNotification(
+                    LoggingMessageNotificationParams(
+                        level = LoggingLevel.Info,
+                        data = buildJsonObject {
+                            put("message", "Processed $i/$items items")
+                        }
+                    )
+                )
+            )
+        }
+    }
+    
+    CallToolResult(
+        content = listOf(TextContent(text = "Batch processing complete"))
+    )
+}
+```
+
+<Note>
+  See [Logging](/server/logging) for more details on sending log messages from tools.
+</Note>
+
+## Related Topics
+
+- [Prompts](/server/prompts) - For user-controlled templates
+- [Resources](/server/resources) - For exposing data sources  
+- [Logging](/server/logging) - For progress reporting and debugging

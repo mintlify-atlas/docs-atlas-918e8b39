@@ -1,0 +1,386 @@
+---
+title: Prompts
+description: Create user-controlled prompt templates for LLM interactions
+---
+
+Prompts are user-controlled templates that clients discover and use to structure LLM interactions. They work like slash commands or saved workflows—users select them, fill in arguments, and the server returns structured messages ready for the model.
+
+## When to Use Prompts
+
+Prompts are ideal for:
+
+- Repeatable workflows (bug triage, code review, onboarding checklists)
+- Saved searches or queries with parameters
+- Interactive templates that require user input
+- Standardized conversation starters
+
+<Note>
+  Prompts are **user-initiated**. For server-driven operations, use [Tools](/server/tools) instead.
+</Note>
+
+## Enabling Prompt Support
+
+Declare the `prompts` capability in your server options:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation(
+        name = "example-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            prompts = ServerCapabilities.Prompts(listChanged = true),
+        ),
+    )
+)
+```
+
+<ParamField path="listChanged" type="boolean" default="false">
+  Set to `true` if your prompt catalog can change at runtime. The server will automatically notify all connected clients when prompts are added or removed.
+</ParamField>
+
+## Adding Prompts
+
+### Simple Prompt
+
+Create a basic prompt without arguments:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.GetPromptResult
+import io.modelcontextprotocol.kotlin.sdk.types.PromptMessage
+import io.modelcontextprotocol.kotlin.sdk.types.Role
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+
+server.addPrompt(
+    name = "daily-standup",
+    description = "Generate a daily standup summary",
+) { request ->
+    GetPromptResult(
+        description = "Daily standup template",
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(text = "Please provide a brief standup update with: 1) What you did yesterday 2) What you'll do today 3) Any blockers"),
+            ),
+        ),
+    )
+}
+```
+
+### Prompt with Arguments
+
+Add required or optional parameters to your prompts:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.PromptArgument
+
+server.addPrompt(
+    name = "code-review",
+    description = "Ask the model to review a diff",
+    arguments = listOf(
+        PromptArgument(
+            name = "diff",
+            description = "Unified diff to review",
+            required = true
+        ),
+        PromptArgument(
+            name = "focus",
+            description = "Specific aspect to review (security, performance, style)",
+            required = false
+        ),
+    ),
+) { request ->
+    val diff = request.arguments?.get("diff") ?: ""
+    val focus = request.arguments?.get("focus") ?: "general quality"
+    
+    GetPromptResult(
+        description = "Code review helper",
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(
+                    text = """Review this code change with focus on $focus:
+                        |
+                        |$diff
+                        |
+                        |Provide:
+                        |1. Overall assessment
+                        |2. Key issues or concerns
+                        |3. Suggestions for improvement
+                    """.trimMargin()
+                ),
+            ),
+        ),
+    )
+}
+```
+
+### Multi-Message Conversations
+
+Return multiple messages to set up complex conversation contexts:
+
+```kotlin
+server.addPrompt(
+    name = "Kotlin Developer",
+    description = "Develop small kotlin applications",
+    arguments = listOf(
+        PromptArgument(
+            name = "Project Name",
+            description = "Project name for the new project",
+            required = true,
+        ),
+    ),
+) { request ->
+    val projectName = request.arguments?.get("Project Name")
+    
+    GetPromptResult(
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(
+                    "Develop a kotlin project named <name>$projectName</name>",
+                ),
+            ),
+        ),
+        description = "Project setup for $projectName",
+    )
+}
+```
+
+## API Signatures
+
+### addPrompt (detailed)
+
+```kotlin
+fun addPrompt(
+    name: String,
+    description: String? = null,
+    arguments: List<PromptArgument>? = null,
+    promptProvider: suspend ClientConnection.(GetPromptRequest) -> GetPromptResult
+)
+```
+
+<ParamField path="name" type="String" required>
+  Unique identifier for the prompt. Must be unique across all prompts in the server.
+</ParamField>
+
+<ParamField path="description" type="String">
+  Human-readable description of what the prompt does. Shown to users when browsing prompts.
+</ParamField>
+
+<ParamField path="arguments" type="List<PromptArgument>">
+  List of arguments the prompt accepts. Each argument can be required or optional.
+</ParamField>
+
+<ParamField path="promptProvider" type="suspend (GetPromptRequest) -> GetPromptResult" required>
+  Handler function that generates the prompt content. Receives the request with filled arguments and returns messages.
+</ParamField>
+
+### addPrompt (with Prompt object)
+
+```kotlin
+fun addPrompt(
+    prompt: Prompt,
+    promptProvider: suspend ClientConnection.(GetPromptRequest) -> GetPromptResult
+)
+```
+
+Alternative signature accepting a pre-constructed `Prompt` object.
+
+## Managing Prompts
+
+### Add Multiple Prompts
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.RegisteredPrompt
+import io.modelcontextprotocol.kotlin.sdk.types.Prompt
+
+val prompts = listOf(
+    RegisteredPrompt(
+        prompt = Prompt(name = "prompt1", description = "First prompt"),
+        messageProvider = { request -> /* ... */ }
+    ),
+    RegisteredPrompt(
+        prompt = Prompt(name = "prompt2", description = "Second prompt"),
+        messageProvider = { request -> /* ... */ }
+    ),
+)
+
+server.addPrompts(prompts)
+```
+
+### Remove Prompts
+
+```kotlin
+// Remove a single prompt
+val removed: Boolean = server.removePrompt("code-review")
+
+// Remove multiple prompts
+val count: Int = server.removePrompts(listOf("prompt1", "prompt2"))
+```
+
+<Warning>
+  When you add or remove prompts at runtime, the server automatically sends `notifications/prompts/list_changed` to all clients if `listChanged = true` in capabilities.
+</Warning>
+
+## Accessing Active Prompts
+
+Get a snapshot of all registered prompts:
+
+```kotlin
+val activePrompts: Map<String, RegisteredPrompt> = server.prompts
+
+activePrompts.forEach { (name, registered) ->
+    println("Prompt: $name")
+    println("  Description: ${registered.prompt.description}")
+    println("  Arguments: ${registered.prompt.arguments?.size ?: 0}")
+}
+```
+
+## Client Request Flow
+
+<Steps>
+
+### Client Lists Prompts
+
+Client calls `prompts/list` to discover available prompts:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "prompts/list",
+  "id": 1
+}
+```
+
+Server responds with all registered prompts:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "prompts": [
+      {
+        "name": "code-review",
+        "description": "Ask the model to review a diff",
+        "arguments": [
+          {
+            "name": "diff",
+            "description": "Unified diff to review",
+            "required": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Client Gets Prompt Content
+
+Client calls `prompts/get` with filled arguments:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "prompts/get",
+  "id": 2,
+  "params": {
+    "name": "code-review",
+    "arguments": {
+      "diff": "--- a/file.kt\n+++ b/file.kt\n..."
+    }
+  }
+}
+```
+
+### Server Returns Messages
+
+Your handler is invoked and returns structured messages:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "description": "Code review helper",
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Review this code change...\n\n--- a/file.kt\n+++ b/file.kt\n..."
+        }
+      }
+    ]
+  }
+}
+```
+
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Templates Focused" icon="bullseye">
+    Each prompt should serve a single, well-defined purpose. Create multiple prompts rather than adding too many optional parameters.
+  </Card>
+  
+  <Card title="Provide Clear Descriptions" icon="info">
+    Write descriptions that help users understand when to use each prompt. Include example use cases.
+  </Card>
+  
+  <Card title="Validate Arguments" icon="check">
+    Check that required arguments are present and validate their format before generating messages.
+  </Card>
+  
+  <Card title="Use listChanged Sparingly" icon="bell">
+    Only set `listChanged = true` if your catalog changes at runtime. Static prompt lists don't need notifications.
+  </Card>
+</CardGroup>
+
+## Error Handling
+
+Handle missing or invalid arguments gracefully:
+
+```kotlin
+server.addPrompt(
+    name = "safe-prompt",
+    description = "Example with validation",
+    arguments = listOf(
+        PromptArgument(name = "input", required = true),
+    ),
+) { request ->
+    val input = request.arguments?.get("input")
+    
+    if (input.isNullOrBlank()) {
+        throw IllegalArgumentException("Input argument is required and cannot be empty")
+    }
+    
+    GetPromptResult(
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(text = "Process: $input"),
+            ),
+        ),
+    )
+}
+```
+
+<Note>
+  Throwing exceptions in prompt handlers will result in JSON-RPC error responses to the client.
+</Note>
+
+## Related Topics
+
+- [Tools](/server/tools) - For model-controlled operations
+- [Resources](/server/resources) - For exposing data sources
+- [Completion](/server/completion) - For argument autocompletion

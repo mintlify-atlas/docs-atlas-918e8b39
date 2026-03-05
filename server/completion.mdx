@@ -1,0 +1,368 @@
+---
+title: Completion
+description: Provide argument autocompletion suggestions for prompts and resources
+---
+
+Completion provides argument autocompletion suggestions to help users fill in prompt and resource template parameters. When enabled, your server responds to `completion/complete` requests with a ranked list of suggestions.
+
+## When to Use Completion
+
+Completion is ideal for:
+
+- Suggesting valid values for enum-like arguments
+- Providing autocomplete for file paths or resource names
+- Offering context-aware suggestions based on other arguments
+- Limiting user input to known valid options
+- Improving user experience with guided input
+
+<Note>
+  Completion is optional. Only implement it if you have meaningful suggestions to offer. Many servers don't need it.
+</Note>
+
+## Enabling Completion Support
+
+Declare the `completions` capability in your server options:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation(
+        name = "example-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            completions = ServerCapabilities.Completions,
+        ),
+    )
+)
+```
+
+## Implementing Completion
+
+### Basic Completion Handler
+
+Set up a request handler for `completion/complete`:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.CompleteRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CompleteResult
+import io.modelcontextprotocol.kotlin.sdk.types.Method
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+suspend fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "example-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                completions = ServerCapabilities.Completions,
+            ),
+        )
+    )
+
+    val session = server.createSession(
+        StdioServerTransport(
+            inputStream = System.`in`.asSource().buffered(),
+            outputStream = System.out.asSink().buffered()
+        )
+    )
+
+    session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+        val options = listOf("kotlin", "compose", "coroutine")
+        val matches = options.filter { it.startsWith(request.argument.value.lowercase()) }
+
+        CompleteResult(
+            completion = CompleteResult.Completion(
+                values = matches.take(3),
+                total = matches.size,
+                hasMore = matches.size > 3,
+            ),
+        )
+    }
+}
+```
+
+### Completion with Pagination
+
+For large result sets, return paginated suggestions:
+
+```kotlin
+session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+    val allOptions = listOf(
+        "kotlin", "compose", "coroutine", "koin", "ktor",
+        "kotlinx-serialization", "kotlinx-coroutines", "kotest"
+    )
+    
+    val matches = allOptions.filter { 
+        it.contains(request.argument.value.lowercase()) 
+    }
+    
+    val pageSize = 5
+    val page = matches.take(pageSize)
+    
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = page,
+            total = matches.size,
+            hasMore = matches.size > pageSize,
+        ),
+    )
+}
+```
+
+<ParamField path="values" type="List<String>" required>
+  List of completion suggestions. Return up to 100 values per request.
+</ParamField>
+
+<ParamField path="total" type="Int">
+  Total number of matching values available (for pagination UI).
+</ParamField>
+
+<ParamField path="hasMore" type="Boolean">
+  Whether more results are available beyond the returned values.
+</ParamField>
+
+## Context-Aware Completion
+
+Use the request context to provide smarter suggestions:
+
+```kotlin
+session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+    // Access the argument being completed
+    val argumentName = request.argument.name
+    val currentValue = request.argument.value
+    
+    // Access other arguments for context
+    val otherArgs = request.context?.arguments ?: emptyMap()
+    
+    val suggestions = when (argumentName) {
+        "language" -> listOf("kotlin", "java", "scala")
+        "framework" -> {
+            // Filter frameworks based on selected language
+            when (otherArgs["language"]) {
+                "kotlin" -> listOf("ktor", "spring", "compose")
+                "java" -> listOf("spring", "quarkus", "micronaut")
+                else -> listOf("ktor", "spring", "quarkus")
+            }
+        }
+        else -> emptyList()
+    }
+    
+    val matches = suggestions.filter { 
+        it.startsWith(currentValue.lowercase()) 
+    }
+    
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = matches,
+            total = matches.size,
+            hasMore = false,
+        ),
+    )
+}
+```
+
+## Reference Types
+
+The completion request includes a reference to the prompt or resource template:
+
+```kotlin
+session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+    // Check what type of reference we're completing for
+    val suggestions = when (request.ref) {
+        is CompleteRequestParams.Ref.Prompt -> {
+            val promptName = (request.ref as CompleteRequestParams.Ref.Prompt).name
+            getSuggestionsForPrompt(promptName, request.argument.name)
+        }
+        is CompleteRequestParams.Ref.ResourceTemplate -> {
+            val templateUri = (request.ref as CompleteRequestParams.Ref.ResourceTemplate).uri
+            getSuggestionsForResource(templateUri, request.argument.name)
+        }
+        null -> emptyList()
+    }
+    
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = suggestions,
+            total = suggestions.size,
+            hasMore = false,
+        ),
+    )
+}
+```
+
+## Client Request Flow
+
+<Steps>
+
+### Client Sends Completion Request
+
+Client requests suggestions for an argument:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "completion/complete",
+  "id": 1,
+  "params": {
+    "ref": {
+      "type": "ref/prompt",
+      "name": "code-review"
+    },
+    "argument": {
+      "name": "focus",
+      "value": "sec"
+    }
+  }
+}
+```
+
+### Server Returns Suggestions
+
+Your handler returns matching values:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "completion": {
+      "values": ["security", "secrets"],
+      "total": 2,
+      "hasMore": false
+    }
+  }
+}
+```
+
+### Client Shows Suggestions
+
+Client displays the suggestions to the user in a dropdown or autocomplete UI.
+
+</Steps>
+
+## API Signatures
+
+### CompleteRequest
+
+```kotlin
+data class CompleteRequest(
+    val params: CompleteRequestParams
+)
+
+data class CompleteRequestParams(
+    val argument: Argument,
+    val ref: Ref,
+    val context: Context? = null,
+    val meta: JsonObject? = null
+)
+
+data class Argument(
+    val name: String,
+    val value: String
+)
+```
+
+### CompleteResult
+
+```kotlin
+data class CompleteResult(
+    val completion: Completion,
+    val meta: JsonObject? = null
+)
+
+data class Completion(
+    val values: List<String>,
+    val total: Int? = null,
+    val hasMore: Boolean? = null
+)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Limit Results" icon="list">
+    Return at most 100 suggestions per request. Use pagination for larger sets.
+  </Card>
+  
+  <Card title="Filter Efficiently" icon="filter">
+    Apply filters early to avoid processing unnecessary data. Use case-insensitive matching.
+  </Card>
+  
+  <Card title="Rank by Relevance" icon="ranking-star">
+    Put the most relevant suggestions first. Consider prefix matches over substring matches.
+  </Card>
+  
+  <Card title="Use Context" icon="brain">
+    Leverage other argument values to provide smarter, context-aware suggestions.
+  </Card>
+</CardGroup>
+
+## Performance Considerations
+
+### Cache Static Options
+
+If your suggestions don't change often, cache them:
+
+```kotlin
+val frameworkOptions = listOf("ktor", "spring", "quarkus", "micronaut")
+
+session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+    // Use cached options instead of fetching every time
+    val matches = frameworkOptions.filter { 
+        it.startsWith(request.argument.value.lowercase()) 
+    }
+    
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = matches,
+            total = matches.size,
+            hasMore = false,
+        ),
+    )
+}
+```
+
+### Handle Timeouts
+
+For expensive completion logic, add timeouts:
+
+```kotlin
+import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.seconds
+
+session.setRequestHandler<CompleteRequest>(Method.Defined.CompletionComplete) { request, _ ->
+    val suggestions = try {
+        withTimeout(2.seconds) {
+            fetchSuggestionsFromDatabase(request.argument.value)
+        }
+    } catch (e: TimeoutException) {
+        // Return partial or cached results on timeout
+        emptyList()
+    }
+    
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = suggestions,
+            total = suggestions.size,
+            hasMore = false,
+        ),
+    )
+}
+```
+
+## Related Topics
+
+- [Prompts](/server/prompts) - Create templates that use completion
+- [Resources](/server/resources) - Expose resources with completable arguments
+- [Pagination](/server/pagination) - Handle large result sets

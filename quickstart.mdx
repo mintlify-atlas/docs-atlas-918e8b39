@@ -1,80 +1,412 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Build your first MCP client and server in minutes
 ---
 
-## Get started in three steps
+This guide walks you through creating a simple MCP client and server using real examples from the SDK.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+- Kotlin 2.2+ installed
+- Gradle project set up
+- MCP SDK dependencies added (see [Installation](/installation))
+
+## Creating a Client
+
+Let's build a client that connects to an MCP server and lists available tools.
+
+<Steps>
+  <Step title="Import required dependencies">
+    ```kotlin
+    import io.ktor.client.HttpClient
+    import io.ktor.client.plugins.sse.SSE
+    import io.modelcontextprotocol.kotlin.sdk.client.Client
+    import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+    import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+    import kotlinx.coroutines.runBlocking
+    ```
+  </Step>
+
+  <Step title="Create and configure the client">
+    ```kotlin
+    fun main(args: Array<String>) = runBlocking {
+        val url = args.firstOrNull() ?: "http://localhost:3000/mcp"
+
+        // Create Ktor HTTP client with SSE support
+        val httpClient = HttpClient { install(SSE) }
+
+        // Initialize MCP client
+        val client = Client(
+            clientInfo = Implementation(
+                name = "example-client",
+                version = "1.0.0"
+            )
+        )
+
+        // Create transport for communication
+        val transport = StreamableHttpClientTransport(
+            client = httpClient,
+            url = url
+        )
+
+        // Connect to server
+        client.connect(transport)
+
+        // List available tools
+        val tools = client.listTools().tools
+        println("Available tools: ${tools.map { it.name }}")
+    }
+    ```
+
+    <Note>
+      The client uses `Implementation` to identify itself to the server with a name and version.
+    </Note>
+  </Step>
+
+  <Step title="Call a tool">
+    Add tool invocation to interact with server capabilities:
+
+    ```kotlin
+    // Call a specific tool
+    val result = client.callTool(
+        name = "echo",
+        arguments = mapOf("text" to "Hello, MCP!")
+    )
+
+    result.content.forEach { content ->
+        if (content is TextContent) {
+            println(content.text)
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+### STDIO Client Example
+
+For connecting to servers via process stdin/stdout:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+fun connectToStdioServer(serverScriptPath: String) {
+    // Start the server process
+    val process = ProcessBuilder("node", serverScriptPath).start()
+
+    // Setup I/O transport using process streams
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource().buffered(),
+        output = process.outputStream.asSink().buffered()
+    )
+
+    // Create and connect client
+    val client = Client(
+        clientInfo = Implementation("stdio-client", "1.0.0")
+    )
+    client.connect(transport)
+
+    // Now use the client...
+}
+```
+
+## Creating a Server
+
+Now let's build a server that exposes tools and resources.
+
+<Steps>
+  <Step title="Import server dependencies">
+    ```kotlin
+    import io.ktor.server.cio.CIO
+    import io.ktor.server.engine.embeddedServer
+    import io.modelcontextprotocol.kotlin.sdk.server.Server
+    import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+    import io.modelcontextprotocol.kotlin.sdk.server.mcp
+    import io.modelcontextprotocol.kotlin.sdk.types.*
+    import kotlinx.serialization.json.buildJsonObject
+    import kotlinx.serialization.json.put
+    ```
+  </Step>
+
+  <Step title="Create and configure the server">
+    ```kotlin
+    fun main(args: Array<String>) {
+        val port = args.firstOrNull()?.toIntOrNull() ?: 3000
+
+        // Initialize MCP server
+        val mcpServer = Server(
+            serverInfo = Implementation(
+                name = "example-server",
+                version = "1.0.0"
+            ),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    tools = ServerCapabilities.Tools(listChanged = true)
+                )
+            )
+        )
+    }
+    ```
+  </Step>
+
+  <Step title="Add a tool">
+    Register a tool that the server will expose:
+
+    ```kotlin
+    mcpServer.addTool(
+        name = "echo",
+        description = "Echoes back the input text",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                put("text", buildJsonObject { 
+                    put("type", "string")
+                    put("description", "Text to echo")
+                })
+            },
+            required = listOf("text")
+        )
+    ) { request ->
+        val text = request.arguments?.get("text")?.jsonPrimitive?.content 
+            ?: "(empty)"
+        CallToolResult(
+            content = listOf(TextContent(text = "Echo: $text"))
+        )
+    }
+    ```
+  </Step>
+
+  <Step title="Start the server">
+    Launch the server with Ktor:
+
+    ```kotlin
+    embeddedServer(CIO, host = "127.0.0.1", port = port) {
+        mcp {
+            mcpServer
+        }
+    }.start(wait = true)
+
+    println("Server running on http://localhost:$port")
+    ```
+
+    <Tip>
+      The `mcp` DSL automatically configures SSE endpoints and CORS for client connections.
+    </Tip>
+  </Step>
+</Steps>
+
+### Complete Server Example
+
+Here's a working server with multiple features:
+
+<CodeGroup>
+  ```kotlin Server with Tools
+  fun configureServer(): Server {
+      val server = Server(
+          Implementation("mcp-kotlin-server", "0.1.0"),
+          ServerOptions(
+              capabilities = ServerCapabilities(
+                  tools = ServerCapabilities.Tools(listChanged = true),
+                  resources = ServerCapabilities.Resources(
+                      subscribe = true, 
+                      listChanged = true
+                  )
+              )
+          )
+      )
+
+      // Add a tool
+      server.addTool(
+          name = "greet",
+          description = "Greet a user by name"
+      ) { request ->
+          val name = request.arguments?.get("name")?.jsonPrimitive?.content
+          CallToolResult(
+              content = listOf(TextContent("Hello, ${name ?: "World"}!"))
+          )
+      }
+
+      // Add a resource
+      server.addResource(
+          uri = "config://settings",
+          name = "Server Settings",
+          description = "Current server configuration",
+          mimeType = "application/json"
+      ) { request ->
+          ReadResourceResult(
+              contents = listOf(
+                  TextResourceContents(
+                      text = """{ "version": "1.0.0" }""",
+                      uri = request.uri,
+                      mimeType = "application/json"
+                  )
+              )
+          )
+      }
+
+      return server
+  }
+  ```
+
+  ```kotlin Weather Server (STDIO)
+  fun runWeatherServer() {
+      val server = Server(
+          Implementation("weather", "1.0.0"),
+          ServerOptions(
+              capabilities = ServerCapabilities(
+                  tools = ServerCapabilities.Tools(listChanged = true)
+              )
+          )
+      )
+
+      server.addTool(
+          name = "get_forecast",
+          description = "Get weather forecast for coordinates",
+          inputSchema = ToolSchema(
+              properties = buildJsonObject {
+                  putJsonObject("latitude") { put("type", "number") }
+                  putJsonObject("longitude") { put("type", "number") }
+              },
+              required = listOf("latitude", "longitude")
+          )
+      ) { request ->
+          val lat = request.arguments?.get("latitude")?.jsonPrimitive?.doubleOrNull
+          val lon = request.arguments?.get("longitude")?.jsonPrimitive?.doubleOrNull
+          
+          if (lat == null || lon == null) {
+              return@addTool CallToolResult(
+                  content = listOf(TextContent("Invalid coordinates"))
+              )
+          }
+
+          // Fetch weather data...
+          CallToolResult(
+              content = listOf(TextContent("Forecast for $lat,$lon"))
+          )
+      }
+
+      // Use STDIO transport
+      val transport = StdioServerTransport(
+          System.`in`.asSource().buffered(),
+          System.out.asSink().buffered()
+      )
+
+      runBlocking {
+          val session = server.createSession(transport)
+          session.onClose { println("Server closed") }
+          awaitCancellation()
+      }
+  }
+  ```
+</CodeGroup>
+
+## Testing Your Setup
+
+<Steps>
+  <Step title="Start the server">
+    Run your server application:
+
+    ```bash
+    ./gradlew run
+    ```
+  </Step>
+
+  <Step title="Connect with MCP Inspector">
+    Use the official MCP Inspector to test your server:
+
+    ```bash
+    npx -y @modelcontextprotocol/inspector
+    ```
+
+    Connect to `http://localhost:3000` in the Inspector UI.
+  </Step>
+
+  <Step title="Test with your client">
+    Run your client application pointing to your server:
+
+    ```bash
+    ./gradlew runClient --args="http://localhost:3000"
+    ```
+  </Step>
+</Steps>
+
+## Transport Options
+
+The SDK supports multiple transport mechanisms:
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="STDIO - Process Communication">
+    Perfect for editor plugins and CLI tools:
+
+    ```kotlin
+    // Client
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource().buffered(),
+        output = process.outputStream.asSink().buffered()
+    )
+
+    // Server
+    val transport = StdioServerTransport(
+        inputStream = System.`in`.asSource().buffered(),
+        outputStream = System.out.asSink().buffered()
+    )
+    ```
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Streamable HTTP - Recommended for Remote">
+    Best for remote deployments with SSE streaming:
+
+    ```kotlin
+    // Client
+    val transport = StreamableHttpClientTransport(
+        client = HttpClient { install(SSE) },
+        url = "http://localhost:3000/mcp"
+    )
+
+    // Server (Ktor)
+    embeddedServer(CIO, port = 3000) {
+        mcpStreamableHttp(path = "/mcp") {
+            MyServer()
+        }
+    }.start(wait = true)
+    ```
+  </Accordion>
+
+  <Accordion title="WebSocket - Full Duplex">
+    For low-latency, bidirectional communication:
+
+    ```kotlin
+    // Client
+    val transport = WebSocketClientTransport(
+        client = HttpClient { install(WebSockets) },
+        url = "ws://localhost:3000/mcp"
+    )
+
+    // Server configuration similar to SSE
+    ```
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+<Warning>
+  Each transport requires appropriate Ktor dependencies. See the [Installation](/installation) guide for details.
+</Warning>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+## Next Steps
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core Concepts" icon="book">
+    Learn about prompts, resources, tools, and capabilities
+  </Card>
+  <Card title="API Reference" icon="code" href="https://kotlin.sdk.modelcontextprotocol.io/">
+    Explore the complete API documentation
+  </Card>
+  <Card title="Examples" icon="flask" href="https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples">
+    Browse complete working examples
+  </Card>
+  <Card title="MCP Specification" icon="file-lines" href="https://modelcontextprotocol.io/specification/latest">
+    Read the official MCP specification
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

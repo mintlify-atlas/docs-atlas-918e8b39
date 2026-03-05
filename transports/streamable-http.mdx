@@ -1,0 +1,455 @@
+---
+title: "Streamable HTTP Transport"
+description: "Use HTTP with SSE streaming for production MCP deployments"
+---
+
+Streamable HTTP is the recommended transport for production MCP deployments. It uses HTTP POST for requests and Server-Sent Events (SSE) for streaming responses, with support for both stateful and stateless modes.
+
+## Overview
+
+Streamable HTTP transport provides:
+
+- Single HTTP endpoint for all operations
+- SSE streaming for server-initiated messages
+- Session management (optional)
+- Resume support with event IDs
+- JSON-only mode (no streaming)
+- Compatible with proxies and service meshes
+
+## Client Setup
+
+### Basic Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+
+val httpClient = HttpClient {
+    install(SSE)
+}
+
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp"
+)
+
+val client = Client(
+    clientInfo = Implementation(
+        name = "my-client",
+        version = "1.0.0"
+    )
+)
+
+client.connect(transport)
+```
+
+### With Custom Headers
+
+```kotlin
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp"
+) {
+    // Custom request configuration
+    headers {
+        append("Authorization", "Bearer $token")
+        append("X-Custom-Header", "value")
+    }
+}
+```
+
+### With Reconnection Support
+
+```kotlin
+import kotlin.time.Duration.Companion.seconds
+
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp",
+    reconnectionTime = 5.seconds
+)
+```
+
+### Complete Client Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    val httpClient = HttpClient {
+        install(SSE)
+    }
+
+    val client = Client(
+        clientInfo = Implementation(
+            name = "example-client",
+            version = "1.0.0"
+        )
+    )
+
+    val transport = StreamableHttpClientTransport(
+        client = httpClient,
+        url = "http://localhost:3000/mcp"
+    )
+
+    client.connect(transport)
+
+    // List available tools
+    val tools = client.listTools()
+    println("Available tools: ${tools.tools.map { it.name }}")
+
+    // Clean up
+    client.close()
+    httpClient.close()
+}
+```
+
+## Server Setup
+
+### Using Ktor Plugin (Recommended)
+
+The simplest way to set up a Streamable HTTP server:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "my-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    embeddedServer(CIO, port = 3000) {
+        mcpStreamableHttp {
+            server
+        }
+    }.start(wait = true)
+}
+```
+
+### Custom Path
+
+Mount the MCP endpoint at a custom path:
+
+```kotlin
+embeddedServer(CIO, port = 3000) {
+    mcpStreamableHttp(path = "/api/mcp") {
+        server
+    }
+}.start(wait = true)
+```
+
+### Stateless Mode
+
+Use stateless mode for scenarios where you don't need session persistence:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStatelessStreamableHttp
+
+embeddedServer(CIO, port = 3000) {
+    mcpStatelessStreamableHttp {
+        server
+    }
+}.start(wait = true)
+```
+
+### Manual Configuration
+
+For advanced use cases, configure the transport manually:
+
+```kotlin
+import io.ktor.server.application.call
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+import io.ktor.server.sse.sse
+import io.modelcontextprotocol.kotlin.sdk.server.StreamableHttpServerTransport
+
+embeddedServer(CIO, port = 3000) {
+    val transport = StreamableHttpServerTransport(
+        configuration = StreamableHttpServerTransport.Configuration(
+            enableJsonResponse = false,
+            enableDnsRebindingProtection = true,
+            allowedHosts = listOf("localhost", "127.0.0.1")
+        )
+    )
+
+    routing {
+        post("/mcp") {
+            transport.handleRequest(null, call)
+        }
+        
+        sse("/mcp") {
+            transport.handleRequest(this, call)
+        }
+    }
+}.start(wait = true)
+```
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="Client">
+    ### StreamableHttpClientTransport Parameters
+
+    - **client** (required): `HttpClient` - Ktor HTTP client (must have SSE plugin installed)
+    - **url** (required): `String` - Server endpoint URL
+    - **reconnectionTime** (optional): `Duration` - Time to wait before reconnecting
+    - **requestBuilder** (optional): `HttpRequestBuilder.() -> Unit` - Custom request configuration
+
+    ### Session Properties
+
+    - **sessionId**: `String?` - Current session ID (read-only)
+    - **protocolVersion**: `String?` - Negotiated protocol version
+  </Tab>
+  
+  <Tab title="Server">
+    ### Configuration Class
+
+    ```kotlin
+    StreamableHttpServerTransport.Configuration(
+        enableJsonResponse: Boolean = false,
+        enableDnsRebindingProtection: Boolean = false,
+        allowedHosts: List<String>? = null,
+        allowedOrigins: List<String>? = null,
+        eventStore: EventStore? = null,
+        retryInterval: Duration? = null
+    )
+    ```
+
+    #### Parameters
+
+    - **enableJsonResponse**: Return JSON responses instead of SSE
+    - **enableDnsRebindingProtection**: Enable DNS rebinding protection
+    - **allowedHosts**: List of allowed Host header values
+    - **allowedOrigins**: List of allowed Origin header values  
+    - **eventStore**: Event store for resumable sessions
+    - **retryInterval**: SSE retry interval for reconnection
+  </Tab>
+</Tabs>
+
+## Session Management
+
+### Stateful Mode
+
+In stateful mode, the server generates and tracks session IDs:
+
+```kotlin
+val transport = StreamableHttpServerTransport(
+    configuration = StreamableHttpServerTransport.Configuration()
+)
+
+transport.setSessionIdGenerator {
+    // Generate secure session ID
+    UUID.randomUUID().toString()
+}
+
+transport.setOnSessionInitialized { sessionId ->
+    println("Session started: $sessionId")
+}
+
+transport.setOnSessionClosed { sessionId ->
+    println("Session closed: $sessionId")
+}
+```
+
+### Stateless Mode
+
+Disable session management:
+
+```kotlin
+transport.setSessionIdGenerator(null)
+```
+
+### Session Termination
+
+Clients can explicitly terminate sessions:
+
+```kotlin
+// Client-side
+transport.terminateSession()
+```
+
+## Resumption Support
+
+### Client-Side Resume
+
+```kotlin
+var lastEventId: String? = null
+
+transport.send(
+    message = request,
+    resumptionToken = lastEventId,
+    onResumptionToken = { eventId ->
+        lastEventId = eventId
+    }
+)
+```
+
+### Server-Side Event Store
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.EventStore
+import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
+
+class MyEventStore : EventStore {
+    override suspend fun storeEvent(streamId: String, message: JSONRPCMessage): String {
+        // Store event and return unique ID
+        return generateEventId()
+    }
+
+    override suspend fun replayEventsAfter(
+        lastEventId: String,
+        onEvent: suspend (eventId: String, message: JSONRPCMessage) -> Unit
+    ): String {
+        // Replay events after the given ID
+        return streamId
+    }
+
+    override suspend fun getStreamIdForEventId(eventId: String): String? {
+        // Return stream ID for event
+        return lookupStreamId(eventId)
+    }
+}
+
+val transport = StreamableHttpServerTransport(
+    configuration = StreamableHttpServerTransport.Configuration(
+        eventStore = MyEventStore()
+    )
+)
+```
+
+## Security
+
+### DNS Rebinding Protection
+
+```kotlin
+val transport = StreamableHttpServerTransport(
+    configuration = StreamableHttpServerTransport.Configuration(
+        enableDnsRebindingProtection = true,
+        allowedHosts = listOf("localhost", "127.0.0.1"),
+        allowedOrigins = listOf("http://localhost:3000")
+    )
+)
+```
+
+### CORS Configuration
+
+```kotlin
+import io.ktor.server.plugins.cors.routing.CORS
+
+embeddedServer(CIO, port = 3000) {
+    install(CORS) {
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Delete)
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader("mcp-session-id")
+        allowNonSimpleContentTypes = true
+        allowHost("localhost:3001")
+    }
+    
+    mcpStreamableHttp { server }
+}.start(wait = true)
+```
+
+## Response Modes
+
+<CodeGroup>
+```kotlin SSE Streaming (Default)
+StreamableHttpServerTransport.Configuration(
+    enableJsonResponse = false  // SSE streaming
+)
+```
+
+```kotlin JSON-Only Mode
+StreamableHttpServerTransport.Configuration(
+    enableJsonResponse = true   // Direct JSON responses
+)
+```
+</CodeGroup>
+
+<Note>
+  SSE streaming is recommended for real-time notifications and progress updates. Use JSON-only mode for simple request/response patterns.
+</Note>
+
+## Error Handling
+
+```kotlin
+// Client
+transport.onError { error ->
+    when (error) {
+        is StreamableHttpError -> {
+            println("HTTP error ${error.code}: ${error.message}")
+        }
+        else -> println("Transport error: ${error.message}")
+    }
+}
+
+// Server
+val session = server.createSession(transport)
+session.onError { error ->
+    println("Session error: ${error.message}")
+}
+```
+
+## Platform Support
+
+- **JVM**: ✅ Full support
+- **Native**: ✅ Full support  
+- **JS/Wasm**: ✅ Full support
+
+## Best Practices
+
+1. **Use connection pooling**: Configure Ktor client for connection reuse
+2. **Enable compression**: Use Ktor compression plugins for large payloads
+3. **Set timeouts**: Configure request and socket timeouts appropriately
+4. **Handle reconnection**: Implement exponential backoff for reconnection
+5. **Validate sessions**: Use secure, cryptographically random session IDs
+6. **Monitor streams**: Track active SSE connections and clean up stale ones
+
+## Performance Tuning
+
+```kotlin
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.cio.endpoint
+
+val httpClient = HttpClient(CIO) {
+    engine {
+        maxConnectionsCount = 100
+        endpoint {
+            maxConnectionsPerRoute = 10
+            connectTimeout = 5_000
+            requestTimeout = 30_000
+        }
+    }
+    install(SSE)
+}
+```
+
+## Related Resources
+
+- [MCP Specification: Streamable HTTP](https://spec.modelcontextprotocol.io/specification/2024-11-05/transport/#http-with-sse)
+- [Client API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/-streamable-http-client-transport/index.html)
+- [Server API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-streamable-http-server-transport/index.html)
+- [SSE Transport](/transports/sse)

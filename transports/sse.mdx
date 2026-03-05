@@ -1,0 +1,408 @@
+---
+title: "SSE Transport"
+description: "Use Server-Sent Events for real-time MCP communication"
+---
+
+The SSE (Server-Sent Events) transport provides real-time, one-way communication from server to client using the standard SSE protocol. This transport is available for backwards compatibility with older MCP clients.
+
+<Note>
+  For new projects, use [Streamable HTTP transport](/transports/streamable-http) instead, which provides better session management and resumption support.
+</Note>
+
+## Overview
+
+SSE transport features:
+
+- Server-to-client streaming via SSE
+- Client-to-server messages via HTTP POST
+- Automatic reconnection support
+- Endpoint discovery via SSE events
+- Simple setup with Ktor
+
+## Client Setup
+
+### Basic Example
+
+```kotlin
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+
+val httpClient = HttpClient {
+    install(SSE)
+}
+
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "http://localhost:3000/sse"
+)
+
+val client = Client(
+    clientInfo = Implementation(
+        name = "my-client",
+        version = "1.0.0"
+    )
+)
+
+client.connect(transport)
+```
+
+### With Reconnection
+
+```kotlin
+import kotlin.time.Duration.Companion.seconds
+
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "http://localhost:3000/sse",
+    reconnectionTime = 5.seconds
+)
+```
+
+### With Custom Configuration
+
+```kotlin
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "http://localhost:3000/sse"
+) {
+    // Custom request configuration
+    headers {
+        append("Authorization", "Bearer $token")
+    }
+}
+```
+
+## Server Setup
+
+### Using Application Extension (Recommended)
+
+The simplest approach using the Ktor `Application.mcp` extension:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "my-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    embeddedServer(CIO, port = 3000) {
+        mcp {
+            server
+        }
+    }.start(wait = true)
+}
+```
+
+### Using Route Extension
+
+Mount MCP under a specific path:
+
+```kotlin
+import io.ktor.server.application.install
+import io.ktor.server.routing.route
+import io.ktor.server.routing.routing
+import io.ktor.server.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+embeddedServer(CIO, port = 3000) {
+    install(SSE)
+    
+    routing {
+        route("/api/mcp") {
+            mcp {
+                server
+            }
+        }
+    }
+}.start(wait = true)
+```
+
+### Manual Configuration
+
+For advanced control over routing:
+
+```kotlin
+import io.ktor.server.application.call
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+import io.ktor.server.sse.SSE
+import io.ktor.server.sse.sse
+import io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
+import io.ktor.util.collections.ConcurrentMap
+import kotlinx.coroutines.awaitCancellation
+
+embeddedServer(CIO, port = 3000) {
+    install(SSE)
+    
+    val serverSessions = ConcurrentMap<String, ServerSession>()
+    
+    routing {
+        sse("/sse") {
+            val transport = SseServerTransport(
+                endpoint = "/message",
+                session = this
+            )
+            
+            val serverSession = server.createSession(transport)
+            serverSessions[transport.sessionId] = serverSession
+            
+            serverSession.onClose {
+                serverSessions.remove(transport.sessionId)
+            }
+            
+            awaitCancellation()
+        }
+        
+        post("/message") {
+            val sessionId = call.request.queryParameters["sessionId"]
+            val session = serverSessions[sessionId]
+            val transport = session?.transport as? SseServerTransport
+            
+            transport?.handlePostMessage(call)
+        }
+    }
+}.start(wait = true)
+```
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="Client">
+    ### SseClientTransport Parameters
+
+    - **client** (required): `HttpClient` - Ktor HTTP client with SSE plugin
+    - **urlString** (optional): `String?` - SSE endpoint URL (null to use from request builder)
+    - **reconnectionTime** (optional): `Duration?` - Reconnection delay
+    - **requestBuilder** (optional): `HttpRequestBuilder.() -> Unit` - Custom request config
+
+    ### Properties
+
+    - **origin**: `String` - Server origin (protocol + authority)
+    - **baseUrl**: `String` - Base URL for POST requests
+  </Tab>
+  
+  <Tab title="Server">
+    ### SseServerTransport Parameters
+
+    - **endpoint** (required): `String` - POST endpoint path (relative or absolute)
+    - **session** (required): `ServerSSESession` - Ktor SSE session
+
+    ### Properties
+
+    - **sessionId**: `String` - Generated session identifier (UUID)
+  </Tab>
+</Tabs>
+
+## SSE Event Flow
+
+### Endpoint Discovery
+
+The server sends an `endpoint` event to inform the client where to POST messages:
+
+```kotlin
+// Server automatically sends on connection
+event: endpoint
+data: /message?sessionId=abc-123
+```
+
+### Message Events
+
+JSON-RPC messages are sent as `message` events:
+
+```kotlin
+// Server
+event: message  
+data: {"jsonrpc":"2.0","method":"notifications/message","params":{...}}
+
+// Client receives and processes
+```
+
+### Error Events
+
+Errors are communicated via `error` events:
+
+```kotlin
+event: error
+data: Connection lost
+```
+
+## Complete Example
+
+<CodeGroup>
+```kotlin Server
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+
+fun main() {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "example-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    // Register a tool
+    server.addTool(
+        name = "echo",
+        description = "Echoes back the input"
+    ) { request ->
+        val input = request.arguments?.get("message")?.toString() ?: "(empty)"
+        CallToolResult(
+            content = listOf(TextContent("Echo: $input"))
+        )
+    }
+
+    embeddedServer(CIO, host = "127.0.0.1", port = 3000) {
+        mcp { server }
+    }.start(wait = true)
+}
+```
+
+```kotlin Client
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+fun main() = runBlocking {
+    val httpClient = HttpClient {
+        install(SSE)
+    }
+
+    val client = Client(
+        clientInfo = Implementation(
+            name = "example-client",
+            version = "1.0.0"
+        )
+    )
+
+    val transport = SseClientTransport(
+        client = httpClient,
+        urlString = "http://localhost:3000"
+    )
+
+    client.connect(transport)
+
+    // Call the echo tool
+    val result = client.callTool(
+        name = "echo",
+        arguments = buildJsonObject {
+            put("message", "Hello, SSE!")
+        }
+    )
+
+    println(result.content.joinToString())
+
+    client.close()
+    httpClient.close()
+}
+```
+</CodeGroup>
+
+## Error Handling
+
+```kotlin
+// Client
+transport.onError { error ->
+    println("Transport error: ${error.message}")
+}
+
+// Server  
+val session = server.createSession(transport)
+session.onError { error ->
+    println("Session error: ${error.message}")
+}
+```
+
+## Session Lifecycle
+
+```kotlin
+// Server
+val session = server.createSession(transport)
+
+session.onClose {
+    println("Session ${transport.sessionId} closed")
+    // Clean up resources
+}
+```
+
+## Platform Support
+
+- **JVM**: ✅ Full support
+- **Native**: ✅ Full support  
+- **JS/Wasm**: ✅ Full support
+
+## Best Practices
+
+1. **Use Application.mcp extension**: Simplest setup with automatic SSE installation
+2. **Handle reconnection**: SSE automatically reconnects, ensure server state can handle it
+3. **Clean up sessions**: Track and remove closed sessions to prevent memory leaks
+4. **Validate session IDs**: Always validate session ID from POST requests
+5. **Set timeouts**: Configure SSE connection timeouts appropriately
+
+## Migration to Streamable HTTP
+
+If you're using SSE transport, consider migrating to Streamable HTTP:
+
+<CodeGroup>
+```kotlin Before (SSE)
+import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
+
+val transport = SseClientTransport(
+    client = httpClient,
+    urlString = "http://localhost:3000/sse"
+)
+```
+
+```kotlin After (Streamable HTTP)
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+
+val transport = StreamableHttpClientTransport(
+    client = httpClient,
+    url = "http://localhost:3000/mcp"
+)
+```
+</CodeGroup>
+
+Streamable HTTP provides better session management and resumption support.
+
+## Related Resources
+
+- [Streamable HTTP Transport](/transports/streamable-http)
+- [MCP Specification: SSE Transport](https://spec.modelcontextprotocol.io/specification/2024-11-05/transport/#http-with-sse)
+- [Client API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/-sse-client-transport/index.html)
+- [Server API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-sse-server-transport/index.html)

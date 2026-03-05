@@ -1,0 +1,460 @@
+---
+title: Ktor Server Extensions
+description: Integration helpers for Ktor server applications
+---
+
+The SDK provides Ktor extension functions to simplify integrating MCP servers into Ktor applications. These extensions handle WebSocket setup, routing, and session management automatically.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.server
+```
+
+## WebSocket Extensions
+
+### mcpWebSocket (Route level)
+
+Registers a WebSocket route that creates MCP server sessions.
+
+```kotlin
+fun Route.mcpWebSocket(block: () -> Server)
+```
+
+<ParamField path="block" type="() -> Server" required>
+  Lambda that returns a Server instance for handling connections
+</ParamField>
+
+**Example:**
+
+```kotlin
+import io.ktor.server.application.*
+import io.ktor.server.routing.*
+import io.modelcontextprotocol.kotlin.sdk.server.*
+
+fun Application.module() {
+    routing {
+        mcpWebSocket {
+            Server(
+                serverInfo = Implementation("my-server", "1.0.0"),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools()
+                    )
+                )
+            ).apply {
+                addTool(
+                    name = "echo",
+                    description = "Echoes input"
+                ) { request ->
+                    val msg = request.params.arguments["message"]?.jsonPrimitive?.content
+                    CallToolResult(listOf(TextContent("Echo: $msg")))
+                }
+            }
+        }
+    }
+}
+```
+
+### mcpWebSocket (with path)
+
+Registers a WebSocket route at a specific path.
+
+```kotlin
+fun Route.mcpWebSocket(path: String, block: () -> Server)
+```
+
+<ParamField path="path" type="String" required>
+  URL path for the WebSocket endpoint
+</ParamField>
+
+<ParamField path="block" type="() -> Server" required>
+  Lambda that returns a Server instance
+</ParamField>
+
+**Example:**
+
+```kotlin
+routing {
+    mcpWebSocket("/api/mcp") {
+        createMyServer()
+    }
+}
+```
+
+### mcpWebSocket (Application level)
+
+Registers a WebSocket route at the application level (default path).
+
+```kotlin
+fun Application.mcpWebSocket(block: () -> Server)
+```
+
+**Example:**
+
+```kotlin
+fun Application.module() {
+    mcpWebSocket {
+        Server(serverInfo, options)
+    }
+}
+```
+
+### mcpWebSocket (Application level with path)
+
+Registers a WebSocket route at the application level with a specific path.
+
+```kotlin
+fun Application.mcpWebSocket(path: String, block: () -> Server)
+```
+
+**Example:**
+
+```kotlin
+fun Application.module() {
+    mcpWebSocket("/mcp") {
+        Server(serverInfo, options)
+    }
+}
+```
+
+## Complete Examples
+
+### Basic WebSocket Server
+
+```kotlin
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.routing.*
+import io.modelcontextprotocol.kotlin.sdk.server.*
+import io.modelcontextprotocol.kotlin.sdk.types.*
+
+fun main() {
+    embeddedServer(Netty, port = 8080) {
+        mcpWebSocket("/mcp") {
+            Server(
+                serverInfo = Implementation(
+                    name = "example-server",
+                    version = "1.0.0"
+                ),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools(listChanged = true)
+                    )
+                )
+            ).apply {
+                addTool(
+                    name = "greet",
+                    description = "Greets a user"
+                ) { request ->
+                    val name = request.params.arguments["name"]?.jsonPrimitive?.content ?: "World"
+                    CallToolResult(
+                        content = listOf(TextContent("Hello, $name!"))
+                    )
+                }
+            }
+        }
+    }.start(wait = true)
+}
+```
+
+### Multiple Endpoints
+
+```kotlin
+fun Application.module() {
+    routing {
+        // Admin endpoint with full capabilities
+        mcpWebSocket("/mcp/admin") {
+            Server(
+                serverInfo = Implementation("admin-server", "1.0.0"),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools(listChanged = true),
+                        resources = ServerCapabilities.Resources(
+                            subscribe = true,
+                            listChanged = true
+                        ),
+                        prompts = ServerCapabilities.Prompts(listChanged = true)
+                    )
+                )
+            ).apply {
+                // Add admin tools
+                addTool("system_info", "Get system information") { /* ... */ }
+                addTool("manage_users", "Manage users") { /* ... */ }
+            }
+        }
+        
+        // Public endpoint with limited capabilities
+        mcpWebSocket("/mcp/public") {
+            Server(
+                serverInfo = Implementation("public-server", "1.0.0"),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools()
+                    )
+                )
+            ).apply {
+                addTool("search", "Search public data") { /* ... */ }
+            }
+        }
+    }
+}
+```
+
+### With Authentication
+
+```kotlin
+import io.ktor.server.auth.*
+import io.ktor.server.auth.jwt.*
+
+fun Application.module() {
+    install(Authentication) {
+        jwt("auth-jwt") {
+            // JWT configuration
+        }
+    }
+    
+    routing {
+        authenticate("auth-jwt") {
+            mcpWebSocket("/mcp") {
+                val userId = call.principal<JWTPrincipal>()
+                    ?.payload
+                    ?.getClaim("userId")
+                    ?.asString()
+                
+                Server(
+                    serverInfo = Implementation("authenticated-server", "1.0.0"),
+                    options = ServerOptions(
+                        capabilities = ServerCapabilities(
+                            tools = ServerCapabilities.Tools()
+                        )
+                    )
+                ).apply {
+                    addTool("get_user_data", "Get user-specific data") { request ->
+                        val data = fetchUserData(userId)
+                        CallToolResult(listOf(TextContent(data)))
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### With Logging and Monitoring
+
+```kotlin
+import io.ktor.server.plugins.calllogging.*
+import org.slf4j.event.Level
+
+fun Application.module() {
+    install(CallLogging) {
+        level = Level.INFO
+    }
+    
+    mcpWebSocket("/mcp") {
+        Server(
+            serverInfo = Implementation("monitored-server", "1.0.0"),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    tools = ServerCapabilities.Tools(),
+                    logging = EmptyJsonObject
+                )
+            )
+        ).apply {
+            onConnect {
+                log.info("New MCP client connected. Active sessions: ${sessions.size}")
+            }
+            
+            onClose {
+                log.info("MCP server closing. Closing ${sessions.size} sessions")
+            }
+            
+            addTool("process_data", "Process data") { request ->
+                sendLoggingMessage(
+                    LoggingMessageNotification(
+                        LoggingMessageNotificationParams(
+                            level = LoggingLevel.Info,
+                            logger = "server",
+                            data = "Processing data..."
+                        )
+                    )
+                )
+                
+                val result = processData(request.params.arguments)
+                
+                sendLoggingMessage(
+                    LoggingMessageNotification(
+                        LoggingMessageNotificationParams(
+                            level = LoggingLevel.Info,
+                            logger = "server",
+                            data = "Processing complete"
+                        )
+                    )
+                )
+                
+                CallToolResult(listOf(TextContent(result)))
+            }
+        }
+    }
+}
+```
+
+### Shared Server Instance
+
+```kotlin
+class ServerManager {
+    private val _server = Server(
+        serverInfo = Implementation("shared-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+    
+    init {
+        // Configure server
+        _server.addTool("tool1", "First tool") { /* ... */ }
+        _server.addTool("tool2", "Second tool") { /* ... */ }
+    }
+    
+    fun getServer(): Server = _server
+    
+    suspend fun addToolDynamically(name: String, description: String) {
+        _server.addTool(name, description) { /* ... */ }
+        // Notify all connected clients
+        _server.sessions.values.forEach { it.sendToolListChanged() }
+    }
+}
+
+fun Application.module() {
+    val serverManager = ServerManager()
+    
+    mcpWebSocket("/mcp") {
+        serverManager.getServer()
+    }
+}
+```
+
+## WebSocket Configuration
+
+The extensions automatically install the WebSockets plugin if needed. For custom WebSocket configuration:
+
+```kotlin
+import io.ktor.server.websocket.*
+import kotlin.time.Duration.Companion.seconds
+
+fun Application.module() {
+    install(WebSockets) {
+        pingPeriod = 15.seconds
+        timeout = 15.seconds
+        maxFrameSize = Long.MAX_VALUE
+        masking = false
+    }
+    
+    mcpWebSocket("/mcp") {
+        Server(serverInfo, options)
+    }
+}
+```
+
+## Testing
+
+```kotlin
+import io.ktor.client.plugins.websocket.*
+import io.ktor.server.testing.*
+import kotlin.test.Test
+
+class McpWebSocketTest {
+    @Test
+    fun testMcpWebSocket() = testApplication {
+        application {
+            mcpWebSocket("/mcp") {
+                Server(serverInfo, options)
+            }
+        }
+        
+        val client = createClient {
+            install(WebSockets)
+        }
+        
+        client.webSocket("/mcp") {
+            // Send initialize request
+            send(Frame.Text(initializeRequest))
+            
+            // Receive response
+            val response = incoming.receive() as Frame.Text
+            // Assert response
+        }
+    }
+}
+```
+
+## Best Practices
+
+### Server Instance Management
+
+**Do:** Create a new Server instance for each connection if tools/resources are session-specific:
+
+```kotlin
+mcpWebSocket {
+    Server(serverInfo, options).apply {
+        // Add session-specific tools
+    }
+}
+```
+
+**Do:** Share a single Server instance if tools/resources are global:
+
+```kotlin
+val sharedServer = Server(serverInfo, options)
+
+mcpWebSocket {
+    sharedServer
+}
+```
+
+### Error Handling
+
+Handle errors at the session level:
+
+```kotlin
+mcpWebSocket {
+    Server(serverInfo, options).apply {
+        onConnect {
+            sessions.lastOrNull()?.let { session ->
+                session.onClose {
+                    cleanupSession(session.sessionId)
+                }
+            }
+        }
+    }
+}
+```
+
+### Resource Cleanup
+
+Ensure proper cleanup:
+
+```kotlin
+mcpWebSocket {
+    val server = Server(serverInfo, options)
+    
+    server.onClose {
+        // Cleanup resources
+        database.close()
+        cache.clear()
+    }
+    
+    server
+}
+```
+
+## See Also
+
+- [Server](/api/server/server) - Server implementation
+- [Server Transports](/api/server/transports) - Transport implementations
+- [Ktor WebSockets](https://ktor.io/docs/websocket.html) - Ktor WebSocket documentation
+- [Dokka: Ktor Extensions](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/index.html)

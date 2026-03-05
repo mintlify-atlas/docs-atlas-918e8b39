@@ -1,0 +1,424 @@
+---
+title: Protocol
+description: Core protocol implementation for MCP message handling
+---
+
+The `Protocol` class implements the Model Context Protocol framing layer on top of a pluggable transport. It handles JSON-RPC message routing, request/response correlation, notifications, and progress tracking.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.shared
+```
+
+## Class Definition
+
+```kotlin
+abstract class Protocol(internal val options: ProtocolOptions?)
+```
+
+The Protocol class is abstract and typically used through `Server` or `Client` implementations rather than directly.
+
+## Properties
+
+<ResponseField name="transport" type="Transport?">
+  The currently connected transport, or null if not connected.
+  
+  ```kotlin
+  val transport: Transport?
+  ```
+</ResponseField>
+
+<ResponseField name="requestHandlers" type="Map<String, RequestHandler>">
+  Map of registered request handlers by method name.
+  
+  ```kotlin
+  val requestHandlers: Map<String, suspend (JSONRPCRequest, RequestHandlerExtra) -> RequestResult?>
+  ```
+</ResponseField>
+
+<ResponseField name="notificationHandlers" type="Map<String, NotificationHandler>">
+  Map of registered notification handlers by method name.
+  
+  ```kotlin
+  val notificationHandlers: Map<String, suspend (JSONRPCNotification) -> Unit>
+  ```
+</ResponseField>
+
+<ResponseField name="fallbackRequestHandler" type="RequestHandler?">
+  Optional handler for request methods that don't have a specific handler.
+  
+  ```kotlin
+  var fallbackRequestHandler: (suspend (JSONRPCRequest, RequestHandlerExtra) -> RequestResult?)?
+  ```
+</ResponseField>
+
+<ResponseField name="fallbackNotificationHandler" type="NotificationHandler?">
+  Optional handler for notification methods that don't have a specific handler.
+  
+  ```kotlin
+  var fallbackNotificationHandler: (suspend (JSONRPCNotification) -> Unit)?
+  ```
+</ResponseField>
+
+## Methods
+
+### connect
+
+Attaches to a transport and starts listening for messages.
+
+```kotlin
+suspend fun connect(transport: Transport)
+```
+
+<ParamField path="transport" type="Transport" required>
+  The transport to connect to. The Protocol assumes ownership of the transport.
+</ParamField>
+
+**Example:**
+
+```kotlin
+val protocol = Client(clientInfo, options)
+protocol.connect(StdioClientTransport(input, output))
+```
+
+### close
+
+Closes the connection and cleans up resources.
+
+```kotlin
+suspend fun close()
+```
+
+**Example:**
+
+```kotlin
+protocol.close()
+```
+
+### request
+
+Sends a request and waits for a response.
+
+```kotlin
+suspend fun <T : RequestResult> request(
+    request: Request,
+    options: RequestOptions? = null
+): T
+```
+
+<ParamField path="request" type="Request" required>
+  The request to send
+</ParamField>
+
+<ParamField path="options" type="RequestOptions">
+  Optional request options (timeout, progress callback, etc.)
+</ParamField>
+
+**Returns:** The typed response result
+
+**Throws:** `McpException` on error or timeout
+
+**Example:**
+
+```kotlin
+val result: ListToolsResult = protocol.request(
+    ListToolsRequest(),
+    RequestOptions(timeout = 30.seconds)
+)
+```
+
+### notification
+
+Sends a one-way notification (no response expected).
+
+```kotlin
+suspend fun notification(
+    notification: Notification,
+    relatedRequestId: RequestId? = null
+)
+```
+
+<ParamField path="notification" type="Notification" required>
+  The notification to send
+</ParamField>
+
+<ParamField path="relatedRequestId" type="RequestId">
+  Optional ID of related request (for responses within a request context)
+</ParamField>
+
+**Example:**
+
+```kotlin
+protocol.notification(
+    ResourceListChangedNotification()
+)
+```
+
+### setRequestHandler
+
+Registers a handler for incoming requests of a specific method.
+
+```kotlin
+inline fun <reified T : Request> setRequestHandler(
+    method: Method,
+    noinline block: suspend (T, RequestHandlerExtra) -> RequestResult?
+)
+```
+
+<ParamField path="method" type="Method" required>
+  The method to handle
+</ParamField>
+
+<ParamField path="block" type="RequestHandler" required>
+  Suspend function that handles the request and returns a result
+</ParamField>
+
+**Example:**
+
+```kotlin
+protocol.setRequestHandler<ListToolsRequest>(Method.Defined.ToolsList) { request, extra ->
+    ListToolsResult(
+        tools = listOf(
+            Tool(name = "calculator", description = "Basic calculator")
+        )
+    )
+}
+```
+
+### removeRequestHandler
+
+Removes a request handler.
+
+```kotlin
+fun removeRequestHandler(method: Method)
+```
+
+<ParamField path="method" type="Method" required>
+  The method to remove the handler for
+</ParamField>
+
+### setNotificationHandler
+
+Registers a handler for incoming notifications of a specific method.
+
+```kotlin
+fun <T : Notification> setNotificationHandler(
+    method: Method,
+    handler: (T) -> Deferred<Unit>
+)
+```
+
+<ParamField path="method" type="Method" required>
+  The method to handle
+</ParamField>
+
+<ParamField path="handler" type="NotificationHandler" required>
+  Function that handles the notification
+</ParamField>
+
+**Example:**
+
+```kotlin
+protocol.setNotificationHandler<ProgressNotification>(Method.Defined.NotificationsProgress) { notification ->
+    println("Progress: ${notification.params.progress}/${notification.params.total}")
+    CompletableDeferred(Unit)
+}
+```
+
+### removeNotificationHandler
+
+Removes a notification handler.
+
+```kotlin
+fun removeNotificationHandler(method: Method)
+```
+
+<ParamField path="method" type="Method" required>
+  The method to remove the handler for
+</ParamField>
+
+### onClose
+
+Callback invoked when the connection closes.
+
+```kotlin
+open fun onClose()
+```
+
+Override this method to perform cleanup when the connection closes.
+
+**Example:**
+
+```kotlin
+class MyProtocol : Protocol(options) {
+    override fun onClose() {
+        println("Connection closed")
+        cleanup()
+    }
+}
+```
+
+### onError
+
+Callback invoked when an error occurs.
+
+```kotlin
+open fun onError(error: Throwable)
+```
+
+<ParamField path="error" type="Throwable" required>
+  The error that occurred
+</ParamField>
+
+Override this method to handle errors. Note that errors are not necessarily fatal.
+
+**Example:**
+
+```kotlin
+class MyProtocol : Protocol(options) {
+    override fun onError(error: Throwable) {
+        logger.error("Protocol error", error)
+    }
+}
+```
+
+## Supporting Types
+
+### ProtocolOptions
+
+Configuration options for the protocol.
+
+```kotlin
+open class ProtocolOptions(
+    var enforceStrictCapabilities: Boolean = false,
+    var timeout: Duration = DEFAULT_REQUEST_TIMEOUT
+)
+```
+
+<ParamField path="enforceStrictCapabilities" type="Boolean">
+  Whether to check that the remote side supports requested methods based on their advertised capabilities. Defaults to false for backwards compatibility.
+</ParamField>
+
+<ParamField path="timeout" type="Duration">
+  Default timeout for requests. Defaults to 60 seconds.
+</ParamField>
+
+### RequestOptions
+
+Per-request options.
+
+```kotlin
+class RequestOptions(
+    relatedRequestId: RequestId? = null,
+    resumptionToken: String? = null,
+    onResumptionToken: ((String) -> Unit)? = null,
+    val onProgress: ProgressCallback? = null,
+    val timeout: Duration = DEFAULT_REQUEST_TIMEOUT
+)
+```
+
+<ParamField path="relatedRequestId" type="RequestId">
+  Associate this outgoing message with an incoming request
+</ParamField>
+
+<ParamField path="resumptionToken" type="String">
+  Token for resuming long-running requests after reconnection
+</ParamField>
+
+<ParamField path="onResumptionToken" type="(String) -> Unit">
+  Callback invoked when the resumption token changes
+</ParamField>
+
+<ParamField path="onProgress" type="ProgressCallback">
+  Callback invoked for progress notifications. If set, automatically requests progress from the remote end.
+  
+  ```kotlin
+  typealias ProgressCallback = (Progress) -> Unit
+  ```
+</ParamField>
+
+<ParamField path="timeout" type="Duration">
+  Timeout for this specific request
+</ParamField>
+
+**Example:**
+
+```kotlin
+val result = protocol.request(
+    request = CallToolRequest(params),
+    options = RequestOptions(
+        timeout = 2.minutes,
+        onProgress = { progress ->
+            println("${progress.progress}/${progress.total ?: "?"}: ${progress.message}")
+        }
+    )
+)
+```
+
+### RequestHandlerExtra
+
+Extra data passed to request handlers.
+
+```kotlin
+class RequestHandlerExtra
+```
+
+Currently empty, reserved for future use.
+
+## Constants
+
+```kotlin
+const val IMPLEMENTATION_NAME: String = "mcp-ktor"
+val DEFAULT_REQUEST_TIMEOUT: Duration = 60.seconds
+```
+
+## Progress Tracking
+
+The protocol automatically handles progress notifications. When you send a request with an `onProgress` callback:
+
+1. The protocol registers a progress handler for the request ID
+2. It adds a `progressToken` to the request parameters
+3. When the remote side sends progress notifications, your callback is invoked
+4. The progress handler is cleaned up when the request completes
+
+```kotlin
+val result = protocol.request(
+    CallToolRequest(params),
+    RequestOptions(
+        onProgress = { progress ->
+            updateProgressBar(progress.progress, progress.total)
+        }
+    )
+)
+```
+
+## Error Handling
+
+The protocol handles errors at multiple levels:
+
+1. **Transport errors** - Reported via `onError()`, connection closed
+2. **Protocol errors** - Invalid messages, serialization failures
+3. **Request errors** - Remote side returns error response (throws `McpException`)
+4. **Timeouts** - Request exceeds timeout (throws `TimeoutCancellationException`)
+
+```kotlin
+try {
+    val result = protocol.request(request, options)
+} catch (e: McpException) {
+    when (e.code) {
+        RPCError.ErrorCode.METHOD_NOT_FOUND -> println("Method not supported")
+        RPCError.ErrorCode.INVALID_PARAMS -> println("Invalid parameters")
+        else -> println("Error: ${e.message}")
+    }
+} catch (e: TimeoutCancellationException) {
+    println("Request timed out")
+}
+```
+
+## See Also
+
+- [Transport](/api/core/transport) - Transport layer abstraction
+- [Server](/api/server/server) - Server implementation
+- [Client](/api/client/client) - Client implementation
+- [Dokka: Protocol](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-core/io.modelcontextprotocol.kotlin.sdk.shared/-protocol/index.html)

@@ -1,0 +1,585 @@
+---
+title: Client
+description: High-level client implementation for connecting to MCP servers
+---
+
+The `Client` class provides a high-level implementation for connecting to MCP servers and calling their exposed capabilities. It automatically handles protocol initialization, capability negotiation, and request/response correlation.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.client
+```
+
+## Class Definition
+
+```kotlin
+open class Client(
+    private val clientInfo: Implementation,
+    options: ClientOptions = ClientOptions()
+) : Protocol(options)
+```
+
+<ParamField path="clientInfo" type="Implementation" required>
+  Information about this client implementation (name and version)
+</ParamField>
+
+<ParamField path="options" type="ClientOptions">
+  Configuration options including capabilities
+</ParamField>
+
+## Properties
+
+<ResponseField name="serverCapabilities" type="ServerCapabilities?">
+  The server's reported capabilities after initialization, or null if not yet connected.
+  
+  ```kotlin
+  var serverCapabilities: ServerCapabilities?
+  ```
+</ResponseField>
+
+<ResponseField name="serverInstructions" type="String?">
+  Optional human-readable instructions from the server.
+  
+  ```kotlin
+  var serverInstructions: String?
+  ```
+</ResponseField>
+
+<ResponseField name="serverVersion" type="Implementation?">
+  The server's version information after initialization.
+  
+  ```kotlin
+  var serverVersion: Implementation?
+  ```
+</ResponseField>
+
+## Methods
+
+### connect
+
+Connects to a server using the given transport and performs initialization handshake.
+
+```kotlin
+override suspend fun connect(transport: Transport)
+```
+
+<ParamField path="transport" type="Transport" required>
+  The transport to use for communication
+</ParamField>
+
+**Example:**
+
+```kotlin
+val client = Client(
+    clientInfo = Implementation("my-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            roots = ClientCapabilities.Roots(listChanged = true)
+        )
+    )
+)
+
+val transport = StdioClientTransport(processInput, processOutput)
+client.connect(transport)
+
+// Client is now ready to use
+println("Connected to ${client.serverVersion?.name}")
+```
+
+### ping
+
+Sends a ping request to check connectivity.
+
+```kotlin
+suspend fun ping(options: RequestOptions? = null): EmptyResult
+```
+
+**Example:**
+
+```kotlin
+try {
+    client.ping()
+    println("Server is responsive")
+} catch (e: Exception) {
+    println("Server not responding: ${e.message}")
+}
+```
+
+### Tool Operations
+
+#### callTool (with parameters)
+
+Calls a tool with dynamic arguments.
+
+```kotlin
+suspend fun callTool(
+    name: String,
+    arguments: Map<String, Any?>,
+    meta: Map<String, Any?> = emptyMap(),
+    options: RequestOptions? = null
+): CallToolResult
+```
+
+<ParamField path="name" type="String" required>
+  Name of the tool to call
+</ParamField>
+
+<ParamField path="arguments" type="Map<String, Any?>" required>
+  Tool arguments as a map
+</ParamField>
+
+<ParamField path="meta" type="Map<String, Any?>">
+  Optional metadata (must follow MCP meta key format)
+</ParamField>
+
+<ParamField path="options" type="RequestOptions">
+  Optional request options (timeout, progress callback)
+</ParamField>
+
+**Example:**
+
+```kotlin
+val result = client.callTool(
+    name = "get_weather",
+    arguments = mapOf(
+        "location" to "San Francisco",
+        "units" to "fahrenheit"
+    ),
+    options = RequestOptions(timeout = 30.seconds)
+)
+
+result.content.forEach { content ->
+    when (content) {
+        is TextContent -> println(content.text)
+        is ImageContent -> saveImage(content.data)
+        else -> {}
+    }
+}
+```
+
+#### callTool (with request)
+
+```kotlin
+suspend fun callTool(
+    request: CallToolRequest,
+    options: RequestOptions? = null
+): CallToolResult
+```
+
+**Example:**
+
+```kotlin
+val request = CallToolRequest(
+    CallToolRequestParams(
+        name = "calculate",
+        arguments = buildJsonObject {
+            put("operation", "add")
+            put("a", 5)
+            put("b", 3)
+        }
+    )
+)
+
+val result = client.callTool(request)
+```
+
+#### listTools
+
+Lists all available tools on the server.
+
+```kotlin
+suspend fun listTools(
+    request: ListToolsRequest = ListToolsRequest(),
+    options: RequestOptions? = null
+): ListToolsResult
+```
+
+**Example:**
+
+```kotlin
+val result = client.listTools()
+
+result.tools.forEach { tool ->
+    println("Tool: ${tool.name}")
+    println("  Description: ${tool.description}")
+    tool.inputSchema?.let { schema ->
+        println("  Input: ${schema.properties}")
+    }
+}
+```
+
+### Prompt Operations
+
+#### getPrompt
+
+Retrieves a specific prompt from the server.
+
+```kotlin
+suspend fun getPrompt(
+    request: GetPromptRequest,
+    options: RequestOptions? = null
+): GetPromptResult
+```
+
+**Example:**
+
+```kotlin
+val result = client.getPrompt(
+    GetPromptRequest(
+        GetPromptRequestParams(
+            name = "code_review",
+            arguments = mapOf(
+                "language" to "Kotlin",
+                "code" to sourceCode
+            )
+        )
+    )
+)
+
+result.messages.forEach { message ->
+    println("${message.role}: ${message.content}")
+}
+```
+
+#### listPrompts
+
+Lists all available prompts.
+
+```kotlin
+suspend fun listPrompts(
+    request: ListPromptsRequest = ListPromptsRequest(),
+    options: RequestOptions? = null
+): ListPromptsResult
+```
+
+**Example:**
+
+```kotlin
+val result = client.listPrompts()
+
+result.prompts.forEach { prompt ->
+    println("Prompt: ${prompt.name}")
+    prompt.description?.let { println("  $it") }
+    prompt.arguments?.forEach { arg ->
+        println("  Argument: ${arg.name}${if (arg.required == true) " (required)" else ""}")
+    }
+}
+```
+
+### Resource Operations
+
+#### readResource
+
+Reads a resource from the server.
+
+```kotlin
+suspend fun readResource(
+    request: ReadResourceRequest,
+    options: RequestOptions? = null
+): ReadResourceResult
+```
+
+**Example:**
+
+```kotlin
+val result = client.readResource(
+    ReadResourceRequest(
+        ReadResourceRequestParams(uri = "file:///data/config.json")
+    )
+)
+
+result.contents.forEach { content ->
+    when (content) {
+        is TextResourceContents -> println(content.text)
+        is BlobResourceContents -> saveBlob(content.blob)
+    }
+}
+```
+
+#### listResources
+
+Lists all available resources.
+
+```kotlin
+suspend fun listResources(
+    request: ListResourcesRequest = ListResourcesRequest(),
+    options: RequestOptions? = null
+): ListResourcesResult
+```
+
+**Example:**
+
+```kotlin
+val result = client.listResources()
+
+result.resources.forEach { resource ->
+    println("Resource: ${resource.name}")
+    println("  URI: ${resource.uri}")
+    println("  Type: ${resource.mimeType}")
+    println("  Description: ${resource.description}")
+}
+```
+
+#### subscribeResource
+
+Subscribes to resource change notifications (if supported).
+
+```kotlin
+suspend fun subscribeResource(
+    request: SubscribeRequest,
+    options: RequestOptions? = null
+): EmptyResult
+```
+
+**Example:**
+
+```kotlin
+if (client.serverCapabilities?.resources?.subscribe == true) {
+    client.subscribeResource(
+        SubscribeRequest(
+            SubscribeRequestParams(uri = "file:///data/config.json")
+        )
+    )
+    
+    // Handle notifications
+    client.setNotificationHandler<ResourceUpdatedNotification>(
+        Method.Defined.NotificationsResourcesUpdated
+    ) { notification ->
+        println("Resource updated: ${notification.params.uri}")
+        CompletableDeferred(Unit)
+    }
+}
+```
+
+#### unsubscribeResource
+
+```kotlin
+suspend fun unsubscribeResource(
+    request: UnsubscribeRequest,
+    options: RequestOptions? = null
+): EmptyResult
+```
+
+### Root Management
+
+#### addRoot
+
+Registers a single root.
+
+```kotlin
+fun addRoot(uri: String, name: String)
+```
+
+**Example:**
+
+```kotlin
+client.addRoot(
+    uri = "file:///projects/my-project",
+    name = "My Project"
+)
+
+// Notify server of change
+client.sendRootsListChanged()
+```
+
+#### removeRoot
+
+```kotlin
+fun removeRoot(uri: String): Boolean
+```
+
+#### sendRootsListChanged
+
+Notifies the server that the roots list has changed.
+
+```kotlin
+suspend fun sendRootsListChanged()
+```
+
+### Logging
+
+#### setLoggingLevel
+
+Sets the logging level on the server.
+
+```kotlin
+suspend fun setLoggingLevel(
+    level: LoggingLevel,
+    options: RequestOptions? = null
+): EmptyResult
+```
+
+**Example:**
+
+```kotlin
+if (client.serverCapabilities?.logging != null) {
+    client.setLoggingLevel(LoggingLevel.Debug)
+}
+```
+
+### Completion
+
+#### complete
+
+Requests completion suggestions (if supported).
+
+```kotlin
+suspend fun complete(
+    params: CompleteRequest,
+    options: RequestOptions? = null
+): CompleteResult
+```
+
+**Example:**
+
+```kotlin
+if (client.serverCapabilities?.prompts != null) {
+    val result = client.complete(
+        CompleteRequest(
+            CompleteRequestParams(
+                ref = CompletionRef(
+                    type = "ref/prompt",
+                    name = "code_review"
+                ),
+                argument = PromptArgument(
+                    name = "language",
+                    value = "Kot"
+                )
+            )
+        )
+    )
+    
+    result.completion.values.forEach { suggestion ->
+        println(suggestion)
+    }
+}
+```
+
+### Elicitation
+
+#### setElicitationHandler
+
+Sets a handler for elicitation requests from the server.
+
+```kotlin
+fun setElicitationHandler(
+    handler: (ElicitRequest) -> ElicitResult
+)
+```
+
+**Example:**
+
+```kotlin
+client.setElicitationHandler { request ->
+    // Display form to user
+    val userInput = showFormDialog(request.params)
+    
+    ElicitResult(
+        ElicitResultParams(
+            response = userInput
+        )
+    )
+}
+```
+
+## Supporting Types
+
+### ClientOptions
+
+```kotlin
+class ClientOptions(
+    val capabilities: ClientCapabilities = ClientCapabilities(),
+    enforceStrictCapabilities: Boolean = true
+) : ProtocolOptions(enforceStrictCapabilities)
+```
+
+<ParamField path="capabilities" type="ClientCapabilities">
+  Capabilities this client supports
+</ParamField>
+
+<ParamField path="enforceStrictCapabilities" type="Boolean">
+  Whether to check server capabilities before making requests
+</ParamField>
+
+**Example:**
+
+```kotlin
+val options = ClientOptions(
+    capabilities = ClientCapabilities(
+        roots = ClientCapabilities.Roots(listChanged = true),
+        sampling = EmptyJsonObject
+    ),
+    enforceStrictCapabilities = true
+)
+```
+
+### ClientCapabilities
+
+See [Types](/api/core/types#clientcapabilities) for complete reference.
+
+## Complete Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.*
+import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.coroutines.runBlocking
+import kotlin.time.Duration.Companion.seconds
+
+fun main() = runBlocking {
+    // Create client
+    val client = Client(
+        clientInfo = Implementation("my-app", "1.0.0"),
+        options = ClientOptions(
+            capabilities = ClientCapabilities(
+                roots = ClientCapabilities.Roots(listChanged = true)
+            )
+        )
+    )
+    
+    // Connect
+    val process = ProcessBuilder("mcp-server").start()
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource(),
+        output = process.outputStream.asSink()
+    )
+    
+    client.connect(transport)
+    
+    println("Connected to ${client.serverVersion?.name} ${client.serverVersion?.version}")
+    client.serverInstructions?.let { println("Instructions: $it") }
+    
+    // List available tools
+    val tools = client.listTools()
+    println("\nAvailable tools:")
+    tools.tools.forEach { tool ->
+        println("  - ${tool.name}: ${tool.description}")
+    }
+    
+    // Call a tool
+    val result = client.callTool(
+        name = "get_weather",
+        arguments = mapOf("location" to "San Francisco"),
+        options = RequestOptions(timeout = 10.seconds)
+    )
+    
+    println("\nWeather result:")
+    result.content.forEach { content ->
+        when (content) {
+            is TextContent -> println(content.text)
+            else -> {}
+        }
+    }
+    
+    // Cleanup
+    client.close()
+    process.destroy()
+}
+```
+
+## See Also
+
+- [Client Transports](/api/client/transports) - Transport implementations
+- [Protocol](/api/core/protocol) - Base protocol implementation
+- [Types](/api/core/types) - MCP type system
+- [Dokka: Client](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/-client/index.html)

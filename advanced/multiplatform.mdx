@@ -1,0 +1,324 @@
+---
+title: Multiplatform Support
+description: Build MCP clients and servers for JVM, Native, JS, and Wasm from a single Kotlin codebase
+---
+
+The MCP Kotlin SDK is built with Kotlin Multiplatform, enabling you to target JVM, Native (iOS, watchOS, tvOS), JavaScript, and WebAssembly from a shared codebase.
+
+## Supported Platforms
+
+The SDK supports the following Kotlin targets:
+
+- **JVM**: Java 11+
+- **iOS**: arm64, x64, Simulator arm64
+- **watchOS**: x64, arm64, Simulator arm64
+- **tvOS**: x64, arm64, Simulator arm64
+- **JavaScript**: Browser and Node.js
+- **WebAssembly (Wasm)**: Browser and Node.js
+
+## Adding Dependencies
+
+### Common Main (Multiplatform Projects)
+
+In a Kotlin Multiplatform project, add the SDK to `commonMain` to use it across all platforms:
+
+```kotlin build.gradle.kts
+kotlin {
+    sourceSets {
+        commonMain {
+            dependencies {
+                // Works as a common dependency as well as platform-specific
+                implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+            }
+        }
+    }
+}
+```
+
+### Platform-Specific Configuration
+
+The core SDK module (`kotlin-sdk-core`) demonstrates a complete multiplatform setup:
+
+```kotlin kotlin-sdk-core/build.gradle.kts
+kotlin {
+    // Apple platforms
+    iosArm64()
+    iosX64()
+    iosSimulatorArm64()
+    watchosX64()
+    watchosArm64()
+    watchosSimulatorArm64()
+    tvosX64()
+    tvosArm64()
+    tvosSimulatorArm64()
+    
+    // JavaScript
+    js {
+        browser()
+        nodejs()
+    }
+    
+    // WebAssembly
+    wasmJs {
+        browser()
+        nodejs()
+    }
+
+    sourceSets {
+        commonMain {
+            dependencies {
+                api(libs.kotlinx.serialization.json)
+                api(libs.kotlinx.coroutines.core)
+                api(libs.kotlinx.io.core)
+                api(libs.kotlinx.collections.immutable)
+                implementation(libs.ktor.server.websockets)
+                implementation(libs.kotlin.logging)
+            }
+        }
+
+        commonTest {
+            dependencies {
+                implementation(project(":test-utils"))
+                implementation(kotlin("test"))
+            }
+        }
+
+        jvmTest {
+            dependencies {
+                implementation(libs.junit.jupiter.params)
+                implementation(libs.mockk)
+                runtimeOnly(libs.slf4j.simple)
+            }
+        }
+
+        // Platform-specific workaround for Wasm
+        wasmJsMain.dependencies {
+            api(libs.kotlinx.coroutines.core.wasm)
+        }
+    }
+}
+```
+
+## Ktor Engine Dependencies
+
+The SDK uses [Ktor](https://ktor.io/) but **does not include engine dependencies transitively**. You must declare the appropriate Ktor client or server engine for your target platform.
+
+### JVM Engines
+
+<CodeGroup>
+```kotlin Client - CIO Engine
+dependencies {
+    implementation("io.ktor:ktor-client-cio:$ktorVersion")
+    implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+}
+```
+
+```kotlin Server - Netty Engine
+dependencies {
+    implementation("io.ktor:ktor-server-netty:$ktorVersion")
+    implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+}
+```
+
+```kotlin Server - CIO Engine
+dependencies {
+    implementation("io.ktor:ktor-server-cio:$ktorVersion")
+    implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+}
+```
+</CodeGroup>
+
+### Native Engines
+
+For Apple platforms (iOS, watchOS, tvOS), use the Darwin engine:
+
+```kotlin
+val iosMain by getting {
+    dependencies {
+        implementation("io.ktor:ktor-client-darwin:$ktorVersion")
+        implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+    }
+}
+```
+
+### JavaScript/Wasm Engines
+
+<CodeGroup>
+```kotlin JavaScript (Node.js)
+val jsMain by getting {
+    dependencies {
+        implementation("io.ktor:ktor-client-js:$ktorVersion")
+        implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+    }
+}
+```
+
+```kotlin WebAssembly
+val wasmJsMain by getting {
+    dependencies {
+        implementation("io.ktor:ktor-client-js:$ktorVersion")
+        implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+        // Wasm-specific coroutines
+        api("org.jetbrains.kotlinx:kotlinx-coroutines-core-wasm-js:$coroutinesVersion")
+    }
+}
+```
+</CodeGroup>
+
+See the [Ktor documentation](https://ktor.io/docs/client-dependencies.html) for more engine options.
+
+## Platform-Specific Code
+
+Use Kotlin's `expect`/`actual` mechanism for platform-specific implementations:
+
+```kotlin commonMain/kotlin/utils.kt
+// Common declaration
+expect fun platformName(): String
+```
+
+<CodeGroup>
+```kotlin jvmMain/kotlin/utils.kt
+// JVM implementation
+actual fun platformName(): String = "JVM"
+```
+
+```kotlin iosMain/kotlin/utils.kt
+// iOS implementation
+actual fun platformName(): String = "iOS"
+```
+
+```kotlin jsMain/kotlin/utils.kt
+// JS implementation
+actual fun platformName(): String = "JavaScript"
+```
+</CodeGroup>
+
+## Server Module Limitations
+
+The **server module** (`kotlin-sdk-server`) focuses on JVM and Native platforms where Ktor server is well-supported:
+
+```kotlin kotlin-sdk-server/build.gradle.kts
+kotlin {
+    sourceSets {
+        commonMain {
+            dependencies {
+                api(project(":kotlin-sdk-core"))
+                api(libs.ktor.server.core)
+                api(libs.ktor.server.sse)
+                implementation(libs.ktor.server.websockets)
+                implementation(libs.kotlin.logging)
+            }
+        }
+    }
+}
+```
+
+While the core protocol types and transport abstractions work on all platforms, **server features like Ktor integration are primarily designed for JVM**.
+
+## Testing Across Platforms
+
+### Running Tests
+
+<CodeGroup>
+```bash JVM Tests (Default)
+./gradlew test
+./gradlew :kotlin-sdk-core:jvmTest
+```
+
+```bash JavaScript Tests
+./gradlew jsTest
+./gradlew :kotlin-sdk-core:jsTest
+```
+
+```bash WebAssembly Tests
+./gradlew wasmJsTest
+./gradlew :kotlin-sdk-core:wasmJsTest
+```
+
+```bash All Platform Tests
+./gradlew allTests
+```
+</CodeGroup>
+
+### Platform-Specific Test Setup
+
+The SDK uses platform-specific test frameworks:
+
+- **JVM**: JUnit 5, Mockk, Kotest
+- **Common**: kotlin-test, Kotest assertions
+- **Native/JS/Wasm**: kotlin-test
+
+```kotlin
+commonTest {
+    dependencies {
+        implementation(kotlin("test"))  // Cross-platform test library
+        implementation("io.kotest:kotest-assertions-core:$kotestVersion")
+    }
+}
+
+jvmTest {
+    dependencies {
+        implementation("org.junit.jupiter:junit-jupiter-params:$junitVersion")
+        implementation("io.mockk:mockk:$mockkVersion")
+        runtimeOnly("org.slf4j:slf4j-simple:$slf4jVersion")
+    }
+}
+```
+
+## Build Configuration
+
+Each module uses the shared `mcp.multiplatform` convention plugin, defined in `buildSrc`:
+
+```kotlin
+plugins {
+    id("mcp.multiplatform")
+    id("mcp.publishing")
+    id("mcp.dokka")
+}
+```
+
+This ensures consistent Kotlin, serialization, and API validation across all modules.
+
+## Publishing Artifacts
+
+The SDK publishes platform-specific artifacts to Maven Central:
+
+- `kotlin-sdk-jvm` - JVM artifact
+- `kotlin-sdk-iosarm64` - iOS ARM64
+- `kotlin-sdk-iosx64` - iOS x64
+- `kotlin-sdk-js` - JavaScript
+- `kotlin-sdk-wasm-js` - WebAssembly
+- And more for each supported platform
+
+Gradle automatically resolves the correct artifact for your target platform.
+
+## Best Practices
+
+1. **Test on JVM first**: JVM tests are fastest and provide the most tooling support
+2. **Use commonMain for shared code**: Keep platform-specific code minimal
+3. **Declare Ktor engines explicitly**: Don't rely on transitive dependencies
+4. **Leverage expect/actual sparingly**: Prefer cross-platform APIs when possible
+5. **Validate on target platforms**: Always test on platforms you intend to deploy to
+
+## Platform Support Matrix
+
+| Feature                  | JVM | iOS | watchOS | tvOS | JS  | Wasm |
+|--------------------------|-----|-----|---------|------|-----|------|
+| Client API               | ✅   | ✅   | ✅       | ✅    | ✅   | ✅    |
+| Server API               | ✅   | ✅   | ✅       | ✅    | ⚠️  | ⚠️   |
+| STDIO Transport          | ✅   | ✅   | ✅       | ✅    | ✅   | ✅    |
+| HTTP Transport           | ✅   | ✅   | ✅       | ✅    | ✅   | ✅    |
+| SSE Transport            | ✅   | ✅   | ✅       | ✅    | ⚠️  | ⚠️   |
+| WebSocket Transport      | ✅   | ✅   | ✅       | ✅    | ✅   | ✅    |
+| Ktor Server Integration  | ✅   | ⚠️  | ⚠️      | ⚠️   | ❌   | ❌    |
+
+**Legend**:
+- ✅ Fully supported
+- ⚠️ Limited support (use JVM for production servers)
+- ❌ Not supported
+
+## Resources
+
+- [Kotlin Multiplatform Documentation](https://kotlinlang.org/docs/multiplatform.html)
+- [Ktor Client Engines](https://ktor.io/docs/client-engines.html)
+- [Ktor Server Engines](https://ktor.io/docs/server-engines.html)

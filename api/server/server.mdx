@@ -1,0 +1,533 @@
+---
+title: Server
+description: High-level server implementation for exposing MCP capabilities
+---
+
+The `Server` class provides a high-level implementation for creating MCP servers that can expose tools, prompts, and resources to clients. It manages multiple client sessions and automatically handles protocol initialization and capability negotiation.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.server
+```
+
+## Class Definition
+
+```kotlin
+open class Server(
+    protected val serverInfo: Implementation,
+    protected val options: ServerOptions,
+    protected val instructionsProvider: (() -> String)? = null,
+    block: Server.() -> Unit = {}
+)
+```
+
+<ParamField path="serverInfo" type="Implementation" required>
+  Information about this server implementation (name and version)
+</ParamField>
+
+<ParamField path="options" type="ServerOptions" required>
+  Configuration options including capabilities
+</ParamField>
+
+<ParamField path="instructionsProvider" type="() -> String">
+  Optional provider for instructions from the server to the client. Called each time a new session starts to support dynamic instructions.
+</ParamField>
+
+<ParamField path="block" type="Server.() -> Unit">
+  Configuration block executed during initialization
+</ParamField>
+
+## Properties
+
+<ResponseField name="sessions" type="Map<ServerSessionKey, ServerSession>">
+  Snapshot of all currently active client sessions.
+  
+  ```kotlin
+  val sessions: Map<ServerSessionKey, ServerSession>
+  ```
+</ResponseField>
+
+<ResponseField name="tools" type="Map<String, RegisteredTool>">
+  Snapshot of all registered tools.
+  
+  ```kotlin
+  val tools: Map<String, RegisteredTool>
+  ```
+</ResponseField>
+
+<ResponseField name="prompts" type="Map<String, RegisteredPrompt>">
+  Snapshot of all registered prompts.
+  
+  ```kotlin
+  val prompts: Map<String, RegisteredPrompt>
+  ```
+</ResponseField>
+
+<ResponseField name="resources" type="Map<String, RegisteredResource>">
+  Snapshot of all registered resources.
+  
+  ```kotlin
+  val resources: Map<String, RegisteredResource>
+  ```
+</ResponseField>
+
+## Methods
+
+### createSession
+
+Starts a new server session with the given transport.
+
+```kotlin
+suspend fun createSession(transport: Transport): ServerSession
+```
+
+<ParamField path="transport" type="Transport" required>
+  The transport layer to connect the session with
+</ParamField>
+
+**Returns:** The initialized and connected server session
+
+**Example:**
+
+```kotlin
+val transport = StdioServerTransport(System.`in`.asSource(), System.out.asSink())
+val session = server.createSession(transport)
+```
+
+### close
+
+Closes the server and all active sessions.
+
+```kotlin
+suspend fun close()
+```
+
+**Example:**
+
+```kotlin
+server.close()
+```
+
+### Tool Management
+
+#### addTool (with Tool object)
+
+```kotlin
+fun addTool(
+    tool: Tool,
+    handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult
+)
+```
+
+<ParamField path="tool" type="Tool" required>
+  Tool definition
+</ParamField>
+
+<ParamField path="handler" type="suspend ClientConnection.(CallToolRequest) -> CallToolResult" required>
+  Suspend function that executes the tool
+</ParamField>
+
+**Example:**
+
+```kotlin
+server.addTool(
+    tool = Tool(
+        name = "calculator",
+        description = "Performs basic math operations",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                put("operation", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        add("add")
+                        add("subtract")
+                    })
+                })
+                put("a", buildJsonObject { put("type", "number") })
+                put("b", buildJsonObject { put("type", "number") })
+            },
+            required = listOf("operation", "a", "b")
+        )
+    )
+) { request ->
+    val args = request.params.arguments
+    val op = args["operation"]?.jsonPrimitive?.content
+    val a = args["a"]?.jsonPrimitive?.double ?: 0.0
+    val b = args["b"]?.jsonPrimitive?.double ?: 0.0
+    
+    val result = when (op) {
+        "add" -> a + b
+        "subtract" -> a - b
+        else -> error("Unknown operation")
+    }
+    
+    CallToolResult(
+        content = listOf(TextContent(result.toString()))
+    )
+}
+```
+
+#### addTool (with parameters)
+
+```kotlin
+fun addTool(
+    name: String,
+    description: String,
+    inputSchema: ToolSchema = ToolSchema(),
+    title: String? = null,
+    outputSchema: ToolSchema? = null,
+    toolAnnotations: ToolAnnotations? = null,
+    meta: JsonObject? = null,
+    handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult
+)
+```
+
+<ParamField path="name" type="String" required>
+  Unique tool name
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Human-readable description
+</ParamField>
+
+<ParamField path="inputSchema" type="ToolSchema">
+  JSON Schema for input parameters
+</ParamField>
+
+<ParamField path="handler" type="RequestHandler" required>
+  Tool execution handler
+</ParamField>
+
+**Example:**
+
+```kotlin
+server.addTool(
+    name = "get_weather",
+    description = "Get current weather for a location",
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            put("location", buildJsonObject {
+                put("type", "string")
+                put("description", "City name or zip code")
+            })
+        },
+        required = listOf("location")
+    )
+) { request ->
+    val location = request.params.arguments["location"]?.jsonPrimitive?.content
+    val weather = fetchWeather(location)
+    CallToolResult(
+        content = listOf(TextContent("Weather in $location: $weather"))
+    )
+}
+```
+
+#### removeTool
+
+```kotlin
+fun removeTool(name: String): Boolean
+```
+
+<ParamField path="name" type="String" required>
+  Name of the tool to remove
+</ParamField>
+
+**Returns:** `true` if removed, `false` if not found
+
+### Prompt Management
+
+#### addPrompt (with Prompt object)
+
+```kotlin
+fun addPrompt(
+    prompt: Prompt,
+    promptProvider: suspend ClientConnection.(GetPromptRequest) -> GetPromptResult
+)
+```
+
+<ParamField path="prompt" type="Prompt" required>
+  Prompt definition
+</ParamField>
+
+<ParamField path="promptProvider" type="suspend ClientConnection.(GetPromptRequest) -> GetPromptResult" required>
+  Function that returns the prompt content
+</ParamField>
+
+#### addPrompt (with parameters)
+
+```kotlin
+fun addPrompt(
+    name: String,
+    description: String? = null,
+    arguments: List<PromptArgument>? = null,
+    promptProvider: suspend ClientConnection.(GetPromptRequest) -> GetPromptResult
+)
+```
+
+**Example:**
+
+```kotlin
+server.addPrompt(
+    name = "code_review",
+    description = "Generate a code review prompt",
+    arguments = listOf(
+        PromptArgument("language", "Programming language", required = true),
+        PromptArgument("code", "Code to review", required = true)
+    )
+) { request ->
+    val args = request.params.arguments
+    val language = args?.get("language") ?: "unknown"
+    val code = args?.get("code") ?: ""
+    
+    GetPromptResult(
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(
+                    "Review this $language code:\n\n$code"
+                )
+            )
+        )
+    )
+}
+```
+
+#### removePrompt
+
+```kotlin
+fun removePrompt(name: String): Boolean
+```
+
+### Resource Management
+
+#### addResource
+
+```kotlin
+fun addResource(
+    uri: String,
+    name: String,
+    description: String,
+    mimeType: String = "text/html",
+    readHandler: suspend ClientConnection.(ReadResourceRequest) -> ReadResourceResult
+)
+```
+
+<ParamField path="uri" type="String" required>
+  Unique resource URI
+</ParamField>
+
+<ParamField path="name" type="String" required>
+  Human-readable name
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Description of the resource content
+</ParamField>
+
+<ParamField path="mimeType" type="String">
+  MIME type (defaults to "text/html")
+</ParamField>
+
+<ParamField path="readHandler" type="RequestHandler" required>
+  Function that returns the resource content
+</ParamField>
+
+**Example:**
+
+```kotlin
+server.addResource(
+    uri = "file:///docs/api.md",
+    name = "API Documentation",
+    description = "Complete API reference",
+    mimeType = "text/markdown"
+) { request ->
+    val content = File("docs/api.md").readText()
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                uri = request.params.uri,
+                mimeType = "text/markdown",
+                text = content
+            )
+        )
+    )
+}
+```
+
+#### removeResource
+
+```kotlin
+fun removeResource(uri: String): Boolean
+```
+
+### Lifecycle Callbacks
+
+#### onConnect
+
+Registers a callback invoked when a new session connects.
+
+```kotlin
+fun onConnect(block: () -> Unit)
+```
+
+**Example:**
+
+```kotlin
+server.onConnect {
+    println("New client connected. Total sessions: ${server.sessions.size}")
+}
+```
+
+#### onClose
+
+Registers a callback invoked when the server is closing.
+
+```kotlin
+fun onClose(block: () -> Unit)
+```
+
+**Example:**
+
+```kotlin
+server.onClose {
+    println("Server shutting down")
+    cleanupResources()
+}
+```
+
+## Supporting Types
+
+### ServerOptions
+
+```kotlin
+class ServerOptions(
+    val capabilities: ServerCapabilities,
+    enforceStrictCapabilities: Boolean = true
+) : ProtocolOptions(enforceStrictCapabilities)
+```
+
+<ParamField path="capabilities" type="ServerCapabilities" required>
+  The capabilities this server supports
+</ParamField>
+
+<ParamField path="enforceStrictCapabilities" type="Boolean">
+  Whether to strictly enforce capabilities (defaults to true)
+</ParamField>
+
+**Example:**
+
+```kotlin
+val options = ServerOptions(
+    capabilities = ServerCapabilities(
+        tools = ServerCapabilities.Tools(listChanged = true),
+        resources = ServerCapabilities.Resources(
+            subscribe = true,
+            listChanged = true
+        ),
+        prompts = ServerCapabilities.Prompts(listChanged = true),
+        logging = EmptyJsonObject
+    )
+)
+```
+
+### ServerCapabilities
+
+See [Types](/api/core/types#servercapabilities) for complete reference.
+
+### RegisteredTool
+
+```kotlin
+data class RegisteredTool(
+    val tool: Tool,
+    val handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult
+)
+```
+
+### RegisteredPrompt
+
+```kotlin
+data class RegisteredPrompt(
+    val prompt: Prompt,
+    val messageProvider: suspend ClientConnection.(GetPromptRequest) -> GetPromptResult
+)
+```
+
+### RegisteredResource
+
+```kotlin
+data class RegisteredResource(
+    val resource: Resource,
+    val readHandler: suspend ClientConnection.(ReadResourceRequest) -> ReadResourceResult
+)
+```
+
+## Complete Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.*
+import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.io.asSource
+import kotlinx.io.asSink
+
+fun main() = runBlocking {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "example-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true),
+                resources = ServerCapabilities.Resources(subscribe = false),
+                prompts = ServerCapabilities.Prompts()
+            )
+        ),
+        instructions = "This is an example MCP server"
+    )
+
+    // Add a simple tool
+    server.addTool(
+        name = "echo",
+        description = "Echoes back the input"
+    ) { request ->
+        val message = request.params.arguments["message"]?.jsonPrimitive?.content ?: ""
+        CallToolResult(
+            content = listOf(TextContent("Echo: $message"))
+        )
+    }
+
+    // Add a prompt
+    server.addPrompt(
+        name = "greeting",
+        description = "A friendly greeting"
+    ) { request ->
+        GetPromptResult(
+            messages = listOf(
+                PromptMessage(
+                    role = Role.User,
+                    content = TextContent("Hello! How can I help you today?")
+                )
+            )
+        )
+    }
+
+    // Create session with STDIO transport
+    val transport = StdioServerTransport(
+        System.`in`.asSource(),
+        System.out.asSink()
+    )
+    
+    val session = server.createSession(transport)
+    
+    // Keep server running
+    awaitCancellation()
+}
+```
+
+## See Also
+
+- [ServerSession](/api/server/session) - Individual session management
+- [Server Transports](/api/server/transports) - Transport implementations
+- [Ktor Extensions](/api/server/ktor-extensions) - Integration with Ktor
+- [Dokka: Server](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-server/index.html)

@@ -1,0 +1,96 @@
+---
+title: Introduction
+description: Kotlin Multiplatform SDK for the Model Context Protocol
+---
+
+The MCP Kotlin SDK is a comprehensive implementation of the [Model Context Protocol](https://modelcontextprotocol.io) that enables Kotlin applications to build MCP clients and servers across multiple platforms.
+
+## What is MCP?
+
+The Model Context Protocol (MCP) allows applications to provide context for Large Language Models (LLMs) in a standardized way, separating the concerns of providing context from the actual LLM interaction.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multiplatform Support" icon="layer-group">
+    Target JVM, Native (iOS, macOS, Linux, Windows), JS, and Wasm from a single codebase
+  </Card>
+  <Card title="Client & Server APIs" icon="arrows-left-right">
+    Build both MCP clients that connect to servers and servers that expose resources
+  </Card>
+  <Card title="Multiple Transports" icon="network-wired">
+    Support for STDIO, SSE, Streamable HTTP, and WebSocket transports
+  </Card>
+  <Card title="Coroutine-Friendly" icon="gears">
+    Built with Kotlin coroutines for async, non-blocking operations
+  </Card>
+</CardGroup>
+
+## MCP Primitives
+
+The SDK implements core MCP primitives that enable communication between clients and servers:
+
+| Primitive | Description | Server Role | Client Role |
+|-----------|-------------|-------------|-------------|
+| **Prompts** | Interactive templates for LLM interactions | Provides prompt templates with arguments | Requests and uses prompts |
+| **Resources** | Contextual data sources | Exposes data (files, API responses, etc.) | Reads and subscribes to resources |
+| **Tools** | Executable functions | Defines functions the LLM can invoke | Calls tools to perform actions |
+| **Sampling** | Server-initiated LLM requests | Requests LLM completions from client | Executes LLM calls and returns results |
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Build MCP Clients">
+    Connect to any MCP server to access prompts, resources, and tools. Perfect for:
+    - AI assistants that need context from various sources
+    - Applications integrating with MCP-enabled services
+    - Testing and debugging MCP servers
+  </Accordion>
+  
+  <Accordion title="Create MCP Servers">
+    Expose your application's capabilities through MCP. Ideal for:
+    - Providing specialized tools for LLMs
+    - Making internal APIs accessible to AI systems
+    - Building domain-specific context providers
+  </Accordion>
+  
+  <Accordion title="Multiplatform Applications">
+    Deploy the same MCP logic across platforms:
+    - Desktop applications (JVM, Native)
+    - Mobile apps (iOS, Android)
+    - Web applications (JS, Wasm)
+    - Command-line tools
+  </Accordion>
+</AccordionGroup>
+
+## Architecture
+
+The SDK is organized into focused modules:
+
+```
+io.modelcontextprotocol:kotlin-sdk          # Umbrella (client + server)
+io.modelcontextprotocol:kotlin-sdk-client   # Client-only APIs
+io.modelcontextprotocol:kotlin-sdk-server   # Server-only APIs
+io.modelcontextprotocol:kotlin-sdk-core     # Core types and protocol
+```
+
+<Note>
+  Use the umbrella `kotlin-sdk` artifact if you need both client and server capabilities, or choose `kotlin-sdk-client` or `kotlin-sdk-server` for focused dependencies.
+</Note>
+
+## Platform Requirements
+
+- **Kotlin**: 2.2 or higher
+- **JVM**: Java 11 or higher (when targeting JVM)
+- **Ktor**: Not included transitively - you must add Ktor client/server dependencies
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up the SDK in your project
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first client and server
+  </Card>
+</CardGroup>

@@ -1,0 +1,282 @@
+---
+title: MCP Primitives
+description: Core building blocks of the Model Context Protocol - prompts, resources, tools, and sampling
+---
+
+The MCP protocol defines four core primitives that enable communication between servers and clients. Each primitive serves a specific purpose in the context exchange workflow.
+
+## Overview
+
+MCP primitives define how context flows between clients and servers:
+
+| Primitive     | Server Role                                       | Client Role                            | Description                                       |
+|---------------|---------------------------------------------------|----------------------------------------|---------------------------------------------------|
+| **Prompts**   | Provides prompt templates with optional arguments | Requests and uses prompts              | Interactive templates for LLM interactions        |
+| **Resources** | Exposes data sources (files, API responses, etc.) | Reads and subscribes to resources      | Contextual data for augmenting LLM context        |
+| **Tools**     | Defines executable functions                      | Calls tools to perform actions         | Functions the LLM can invoke to take actions      |
+| **Sampling**  | Requests LLM completions from client              | Executes LLM calls and returns results | Server-initiated LLM requests (reverse direction) |
+
+## Prompts
+
+Prompts are **user-controlled templates** that clients discover and use to structure LLM interactions. They're best for repeatable, structured workflows rather than ad-hoc model calls.
+
+### Key Characteristics
+
+- Clients discover prompts via `prompts/list`
+- Users select prompts (like slash commands)
+- Server returns filled template via `prompts/get`
+- Can include arguments for dynamic content
+
+### Example: Code Review Prompt
+
+```kotlin
+server.addPrompt(
+    name = "code-review",
+    description = "Ask the model to review a diff",
+    arguments = listOf(
+        PromptArgument(
+            name = "diff",
+            description = "Unified diff",
+            required = true
+        )
+    )
+) { request ->
+    GetPromptResult(
+        description = "Quick code review helper",
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(
+                    text = "Review this change:\n${request.arguments?.get("diff")}"
+                )
+            )
+        )
+    )
+}
+```
+
+### Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Bug Triage" icon="bug">
+    Pre-defined questions for investigating issues
+  </Card>
+  <Card title="Code Reviews" icon="code-compare">
+    Templates for reviewing diffs and pull requests
+  </Card>
+  <Card title="Documentation" icon="book">
+    Structured prompts for generating docs
+  </Card>
+  <Card title="Onboarding" icon="user-plus">
+    Checklists and guided workflows
+  </Card>
+</CardGroup>
+
+## Resources
+
+Resources are **application-controlled data** that clients can discover and read. They represent contextual information that can be injected into LLM interactions.
+
+### Key Characteristics
+
+- Identified by stable URIs (any protocol)
+- Discovered via `resources/list` or `resources/templates/list`
+- Read on-demand via `resources/read`
+- Support text and binary content
+- Can be subscribed to for updates
+
+### Example: Release Notes Resource
+
+```kotlin
+server.addResource(
+    uri = "note://release/latest",
+    name = "Release notes",
+    description = "Last deployment summary",
+    mimeType = "text/markdown"
+) { request ->
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                text = "Ship 42 reached production successfully.",
+                uri = request.uri,
+                mimeType = "text/markdown"
+            )
+        )
+    )
+}
+```
+
+### Resource Types
+
+| Type | Description | Example URI |
+|------|-------------|-------------|
+| Files | Local or remote files | `file:///path/to/file.txt` |
+| Database | Query results | `db://users/123` |
+| API | External API responses | `api://github/issues/456` |
+| Generated | Dynamic content | `note://summary/daily` |
+
+### Resource Templates
+
+Resource templates use RFC 6570 URI template syntax for parameterized resources:
+
+```kotlin
+server.addResourceTemplate(
+    uriTemplate = "file:///{directory}/{filename}",
+    name = "File access",
+    description = "Access files in allowed directories"
+) { request ->
+    // Handle parameterized resource request
+    ReadResourceResult(contents = listOf(...))
+}
+```
+
+## Tools
+
+Tools are **model-controlled capabilities** that LLMs can invoke to perform actions. They enable agentic workflows where the model decides what functions to call.
+
+### Key Characteristics
+
+- Discovered via `tools/list`
+- Invoked via `tools/call` with JSON arguments
+- Can return text, images, or structured data
+- Should keep a human in the loop for sensitive operations
+
+### Example: Echo Tool
+
+```kotlin
+server.addTool(
+    name = "echo",
+    description = "Return whatever the user sent back to them",
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            put("text", buildJsonObject {
+                put("type", "string")
+                put("description", "Text to echo back")
+            })
+        },
+        required = listOf("text")
+    )
+) { request ->
+    val text = request.arguments?.get("text")?.jsonPrimitive?.content ?: "(empty)"
+    CallToolResult(
+        content = listOf(TextContent(text = "Echo: $text"))
+    )
+}
+```
+
+### Tool Schema
+
+Tools use JSON Schema to define their inputs:
+
+```kotlin
+val schema = ToolSchema(
+    properties = buildJsonObject {
+        put("query", buildJsonObject {
+            put("type", "string")
+            put("description", "Search query")
+        })
+        put("limit", buildJsonObject {
+            put("type", "integer")
+            put("description", "Maximum results")
+            put("default", 10)
+        })
+    },
+    required = listOf("query")
+)
+```
+
+### Best Practices
+
+- **Clear descriptions**: Help the LLM understand when to use the tool
+- **Validation**: Validate arguments before execution
+- **Error handling**: Return meaningful error messages
+- **Human approval**: Require confirmation for destructive operations
+- **Progress reporting**: Use request context for long-running operations
+
+## Sampling
+
+Sampling allows **servers to request LLM completions from the client**. This reverses the typical flow, enabling servers to leverage the client's LLM access.
+
+### Key Characteristics
+
+- Server initiates the request
+- Client executes the LLM call
+- Client returns the completion
+- Enables server-side agentic workflows
+
+### Example: Client Sampling Handler
+
+```kotlin
+val client = Client(
+    clientInfo = Implementation("demo-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            sampling = buildJsonObject {
+                putJsonObject("tools") { }
+            }
+        )
+    )
+)
+
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    val content = request.messages.lastOrNull()?.content
+    val prompt = if (content is TextContent) content.text else "your topic"
+
+    CreateMessageResult(
+        model = "gpt-4o-mini",
+        role = Role.Assistant,
+        content = TextContent(text = "Here is a short note about $prompt")
+    )
+}
+```
+
+### Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Multi-step Reasoning" icon="brain">
+    Server orchestrates complex workflows with LLM feedback
+  </Card>
+  <Card title="Tool-based Agents" icon="robot">
+    Server provides tools and requests LLM to use them
+  </Card>
+  <Card title="Content Generation" icon="pen-to-square">
+    Server requests text/code generation from LLM
+  </Card>
+  <Card title="Analysis" icon="magnifying-glass-chart">
+    Server provides data and requests LLM analysis
+  </Card>
+</CardGroup>
+
+### Security Considerations
+
+- **User approval**: Always require user confirmation for sampling requests
+- **Model selection**: Client chooses which model to use
+- **Cost control**: Client can reject or limit sampling requests
+- **Privacy**: Client controls what data is sent to LLMs
+
+## Choosing the Right Primitive
+
+| Use Case | Primitive | Why |
+|----------|-----------|-----|
+| User selects a workflow | Prompts | User-controlled, structured templates |
+| Provide context data | Resources | Application-controlled, on-demand access |
+| Enable actions | Tools | Model-controlled, agentic capabilities |
+| Server needs LLM | Sampling | Reverse flow for server-side agents |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Capabilities" icon="sliders" href="/concepts/capabilities">
+    Learn how to declare support for these primitives
+  </Card>
+  <Card title="Server Guide" icon="server" href="/server/getting-started">
+    Build a server with prompts, resources, and tools
+  </Card>
+  <Card title="Client Guide" icon="desktop" href="/client/getting-started">
+    Create a client that consumes MCP primitives
+  </Card>
+  <Card title="API Reference" icon="code" href="https://kotlin.sdk.modelcontextprotocol.io/">
+    Explore detailed API documentation
+  </Card>
+</CardGroup>

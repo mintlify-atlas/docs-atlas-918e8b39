@@ -1,0 +1,427 @@
+---
+title: Ktor Client Extensions
+description: Integration helpers for Ktor HTTP client
+---
+
+The SDK provides Ktor extension functions to simplify creating MCP client transports and connections using Ktor's HTTP client.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.client
+```
+
+## WebSocket Extensions
+
+### mcpWebSocketTransport
+
+Creates a WebSocket transport for MCP communication.
+
+```kotlin
+fun HttpClient.mcpWebSocketTransport(
+    urlString: String? = null,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {}
+): WebSocketClientTransport
+```
+
+<ParamField path="urlString" type="String">
+  Optional URL of the MCP server WebSocket endpoint
+</ParamField>
+
+<ParamField path="requestBuilder" type="HttpRequestBuilder.() -> Unit">
+  Lambda to configure the HTTP request (headers, auth, etc.)
+</ParamField>
+
+**Returns:** A configured `WebSocketClientTransport`
+
+**Example:**
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.websocket.*
+import io.modelcontextprotocol.kotlin.sdk.client.*
+
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+val transport = httpClient.mcpWebSocketTransport(
+    urlString = "wss://api.example.com/mcp"
+) {
+    headers {
+        append("Authorization", "Bearer $token")
+    }
+}
+```
+
+### mcpWebSocket
+
+Creates and connects an MCP client over WebSocket in one step.
+
+```kotlin
+suspend fun HttpClient.mcpWebSocket(
+    urlString: String? = null,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {}
+): Client
+```
+
+<ParamField path="urlString" type="String">
+  Optional URL of the MCP server WebSocket endpoint
+</ParamField>
+
+<ParamField path="requestBuilder" type="HttpRequestBuilder.() -> Unit">
+  Lambda to configure the HTTP request
+</ParamField>
+
+**Returns:** A connected `Client` instance ready to use
+
+**Example:**
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://api.example.com/mcp"
+) {
+    headers {
+        append("Authorization", "Bearer $token")
+        append("User-Agent", "MyApp/1.0")
+    }
+}
+
+// Client is now connected and ready
+val tools = client.listTools()
+```
+
+## Complete Examples
+
+### Basic WebSocket Client
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.websocket.*
+import io.modelcontextprotocol.kotlin.sdk.client.*
+import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    val httpClient = HttpClient(CIO) {
+        install(WebSockets)
+    }
+
+    val client = httpClient.mcpWebSocket(
+        urlString = "wss://localhost:8080/mcp"
+    )
+
+    println("Connected to ${client.serverVersion?.name}")
+
+    // List and call tools
+    val tools = client.listTools()
+    tools.tools.forEach { tool ->
+        println("Tool: ${tool.name} - ${tool.description}")
+    }
+
+    val result = client.callTool(
+        name = "echo",
+        arguments = mapOf("message" to "Hello, MCP!")
+    )
+
+    result.content.forEach { content ->
+        when (content) {
+            is TextContent -> println("Result: ${content.text}")
+            else -> {}
+        }
+    }
+
+    client.close()
+    httpClient.close()
+}
+```
+
+### With Authentication
+
+```kotlin
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.auth.*
+import io.ktor.client.plugins.auth.providers.*
+import io.ktor.client.plugins.websocket.*
+
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+    install(Auth) {
+        bearer {
+            loadTokens {
+                BearerTokens(
+                    accessToken = getAccessToken(),
+                    refreshToken = getRefreshToken()
+                )
+            }
+            refreshTokens {
+                val newTokens = refreshTokens()
+                BearerTokens(
+                    accessToken = newTokens.accessToken,
+                    refreshToken = newTokens.refreshToken
+                )
+            }
+        }
+    }
+}
+
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://api.example.com/mcp"
+)
+```
+
+### With Custom Headers
+
+```kotlin
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://api.example.com/mcp"
+) {
+    headers {
+        append("X-API-Key", apiKey)
+        append("X-Client-Version", "1.0.0")
+        append("X-Request-ID", UUID.randomUUID().toString())
+    }
+}
+```
+
+### With Timeout Configuration
+
+```kotlin
+import io.ktor.client.plugins.*
+import kotlin.time.Duration.Companion.seconds
+
+val httpClient = HttpClient(CIO) {
+    install(WebSockets) {
+        pingInterval = 20.seconds.inWholeMilliseconds
+    }
+    install(HttpTimeout) {
+        requestTimeoutMillis = 60.seconds.inWholeMilliseconds
+        connectTimeoutMillis = 10.seconds.inWholeMilliseconds
+    }
+}
+
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://api.example.com/mcp"
+)
+```
+
+### With Logging
+
+```kotlin
+import io.ktor.client.plugins.logging.*
+
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+    install(Logging) {
+        logger = Logger.DEFAULT
+        level = LogLevel.ALL
+    }
+}
+
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://api.example.com/mcp"
+)
+```
+
+### Error Handling
+
+```kotlin
+import io.ktor.client.plugins.*
+import io.ktor.client.network.sockets.*
+
+try {
+    val client = httpClient.mcpWebSocket(
+        urlString = "wss://api.example.com/mcp"
+    )
+    
+    // Use client
+    val tools = client.listTools()
+    
+} catch (e: ConnectTimeoutException) {
+    println("Connection timeout: ${e.message}")
+} catch (e: SocketTimeoutException) {
+    println("Socket timeout: ${e.message}")
+} catch (e: Exception) {
+    println("Connection failed: ${e.message}")
+}
+```
+
+### Reconnection Pattern
+
+```kotlin
+suspend fun connectWithRetry(
+    httpClient: HttpClient,
+    url: String,
+    maxAttempts: Int = 3,
+    delay: Long = 5000
+): Client {
+    var attempts = 0
+    var lastError: Exception? = null
+    
+    while (attempts < maxAttempts) {
+        try {
+            return httpClient.mcpWebSocket(urlString = url)
+        } catch (e: Exception) {
+            lastError = e
+            attempts++
+            if (attempts < maxAttempts) {
+                println("Connection attempt $attempts failed, retrying in ${delay}ms...")
+                delay(delay)
+            }
+        }
+    }
+    
+    throw lastError ?: Exception("Failed to connect after $maxAttempts attempts")
+}
+
+val client = connectWithRetry(
+    httpClient = httpClient,
+    url = "wss://api.example.com/mcp"
+)
+```
+
+### Multiple Connections
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+// Connect to multiple servers
+val client1 = httpClient.mcpWebSocket(
+    urlString = "wss://server1.example.com/mcp"
+)
+
+val client2 = httpClient.mcpWebSocket(
+    urlString = "wss://server2.example.com/mcp"
+)
+
+// Use both clients
+val tools1 = client1.listTools()
+val tools2 = client2.listTools()
+
+// Cleanup
+client1.close()
+client2.close()
+httpClient.close()
+```
+
+### Secure WebSocket (WSS)
+
+```kotlin
+import io.ktor.client.engine.cio.*
+import io.ktor.network.tls.*
+import java.security.cert.X509Certificate
+import javax.net.ssl.*
+
+val httpClient = HttpClient(CIO) {
+    engine {
+        https {
+            trustManager = object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+        }
+    }
+    install(WebSockets)
+}
+
+val client = httpClient.mcpWebSocket(
+    urlString = "wss://secure.example.com/mcp"
+)
+```
+
+<Warning>
+  The example above disables certificate validation and should only be used for testing. In production, use proper certificate validation.
+</Warning>
+
+### Client Configuration
+
+The extensions create clients with default settings. For custom client configuration:
+
+```kotlin
+val client = Client(
+    clientInfo = Implementation(
+        name = "my-custom-client",
+        version = "2.0.0"
+    ),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            roots = ClientCapabilities.Roots(listChanged = true),
+            sampling = EmptyJsonObject
+        ),
+        enforceStrictCapabilities = true
+    )
+)
+
+val transport = httpClient.mcpWebSocketTransport(
+    urlString = "wss://api.example.com/mcp"
+)
+
+client.connect(transport)
+```
+
+## Best Practices
+
+### Reuse HttpClient
+
+Create one `HttpClient` instance and reuse it:
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(WebSockets)
+}
+
+// Reuse for multiple connections
+val client1 = httpClient.mcpWebSocket(url1)
+val client2 = httpClient.mcpWebSocket(url2)
+
+// Close clients when done
+client1.close()
+client2.close()
+
+// Close HTTP client last
+httpClient.close()
+```
+
+### Handle Disconnections
+
+```kotlin
+val client = httpClient.mcpWebSocket(urlString)
+
+client.onClose {
+    println("Connection closed, attempting reconnect...")
+    launch {
+        delay(5000)
+        val newClient = httpClient.mcpWebSocket(urlString)
+        // Update references
+    }
+}
+```
+
+### Configure WebSocket Timeouts
+
+```kotlin
+val httpClient = HttpClient(CIO) {
+    install(WebSockets) {
+        pingInterval = 20_000  // 20 seconds
+        maxFrameSize = Long.MAX_VALUE
+    }
+}
+```
+
+## See Also
+
+- [Client](/api/client/client) - Client implementation
+- [Client Transports](/api/client/transports) - Transport implementations
+- [Ktor Client](https://ktor.io/docs/client.html) - Ktor HTTP client documentation
+- [Ktor WebSockets](https://ktor.io/docs/websocket-client.html) - Ktor WebSocket documentation
+- [Dokka: Ktor Extensions](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/index.html)

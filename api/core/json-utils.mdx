@@ -1,0 +1,340 @@
+---
+title: JSON Utilities
+description: JSON serialization helpers and utilities
+---
+
+The `jsonUtils.kt` file provides utilities for working with JSON in the MCP SDK. It includes the shared JSON configuration and helper functions for converting Kotlin types to JSON.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.types
+```
+
+## JSON Configuration
+
+### McpJson
+
+The shared JSON serializer instance used throughout the SDK.
+
+```kotlin
+val McpJson: Json
+```
+
+Configured with:
+- `ignoreUnknownKeys = true` - Ignore extra fields in JSON
+- `encodeDefaults = true` - Always encode default values
+- `isLenient = true` - Accept lenient JSON syntax
+- `classDiscriminatorMode = ClassDiscriminatorMode.NONE` - Don't use type discriminators
+- `explicitNulls = false` - Omit null fields from output
+
+**Example:**
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.McpJson
+
+val tool = Tool(name = "calculator", description = "Math tool")
+val json = McpJson.encodeToString(tool)
+val decoded = McpJson.decodeFromString<Tool>(json)
+```
+
+<Note>
+  All SDK types use `McpJson` for serialization. When working with MCP messages, always use this shared instance to ensure compatibility.
+</Note>
+
+## Helper Functions
+
+### toJson
+
+Converts a `Map<String, Any?>` to a `Map<String, JsonElement>`.
+
+```kotlin
+fun Map<String, Any?>.toJson(): Map<String, JsonElement>
+```
+
+This extension function converts arbitrary Kotlin values into Kotlinx Serialization `JsonElement` types, which can then be used in MCP messages.
+
+<ParamField path="this" type="Map<String, Any?>" required>
+  Map with string keys and arbitrary nullable values
+</ParamField>
+
+**Returns:** Map with string keys and `JsonElement` values
+
+**Supported Types:**
+- `null` → `JsonNull`
+- `JsonElement` → passed through unchanged
+- `String` → `JsonPrimitive`
+- `Number` → `JsonPrimitive`
+- `Boolean` → `JsonPrimitive`
+- `Char` → `JsonPrimitive` (as string)
+- `Enum<*>` → `JsonPrimitive` (enum name)
+- `Map<*, *>` → `JsonObject` (recursive)
+- `Collection<*>` → `JsonArray` (recursive)
+- `Array<*>` → `JsonArray` (recursive)
+- Primitive arrays (`IntArray`, `LongArray`, etc.) → `JsonArray`
+- Unsigned arrays (`UIntArray`, `ULongArray`, etc.) → `JsonArray`
+- Other types → `JsonPrimitive` (via `toString()`)
+
+**Example:**
+
+```kotlin
+val params = mapOf(
+    "location" to "San Francisco",
+    "units" to "fahrenheit",
+    "days" to 5,
+    "includeWeekend" to true
+)
+
+val jsonParams: Map<String, JsonElement> = params.toJson()
+
+val request = CallToolRequest(
+    CallToolRequestParams(
+        name = "get_weather",
+        arguments = JsonObject(jsonParams)
+    )
+)
+```
+
+### Type Conversion Examples
+
+<Expandable title="Primitive Types">
+```kotlin
+val map = mapOf(
+    "string" to "hello",
+    "number" to 42,
+    "boolean" to true,
+    "null" to null
+)
+
+val json = map.toJson()
+// {
+//   "string": "hello",
+//   "number": 42,
+//   "boolean": true,
+//   "null": null
+// }
+```
+</Expandable>
+
+<Expandable title="Collections">
+```kotlin
+val map = mapOf(
+    "list" to listOf(1, 2, 3),
+    "set" to setOf("a", "b", "c"),
+    "array" to arrayOf(true, false)
+)
+
+val json = map.toJson()
+// {
+//   "list": [1, 2, 3],
+//   "set": ["a", "b", "c"],
+//   "array": [true, false]
+// }
+```
+</Expandable>
+
+<Expandable title="Nested Objects">
+```kotlin
+val map = mapOf(
+    "user" to mapOf(
+        "name" to "Alice",
+        "age" to 30,
+        "address" to mapOf(
+            "city" to "San Francisco",
+            "zip" to "94102"
+        )
+    )
+)
+
+val json = map.toJson()
+// {
+//   "user": {
+//     "name": "Alice",
+//     "age": 30,
+//     "address": {
+//       "city": "San Francisco",
+//       "zip": "94102"
+//     }
+//   }
+// }
+```
+</Expandable>
+
+<Expandable title="Primitive Arrays">
+```kotlin
+val map = mapOf(
+    "integers" to intArrayOf(1, 2, 3),
+    "doubles" to doubleArrayOf(1.5, 2.5, 3.5),
+    "booleans" to booleanArrayOf(true, false, true)
+)
+
+val json = map.toJson()
+// {
+//   "integers": [1, 2, 3],
+//   "doubles": [1.5, 2.5, 3.5],
+//   "booleans": [true, false, true]
+// }
+```
+</Expandable>
+
+<Expandable title="Enums">
+```kotlin
+enum class Status { ACTIVE, INACTIVE }
+
+val map = mapOf(
+    "status" to Status.ACTIVE
+)
+
+val json = map.toJson()
+// {
+//   "status": "ACTIVE"
+// }
+```
+</Expandable>
+
+## Constants
+
+### EmptyJsonObject
+
+A constant representing an empty JSON object.
+
+```kotlin
+val EmptyJsonObject: JsonObject = JsonObject(emptyMap())
+```
+
+**Example:**
+
+```kotlin
+val notification = InitializedNotification(
+    BaseNotificationParams(meta = EmptyJsonObject)
+)
+```
+
+## Usage in Client Code
+
+### Calling Tools with Dynamic Arguments
+
+```kotlin
+val client = Client(clientInfo, options)
+client.connect(transport)
+
+val result = client.callTool(
+    name = "search",
+    arguments = mapOf(
+        "query" to "Kotlin MCP",
+        "limit" to 10,
+        "filters" to mapOf(
+            "language" to "en",
+            "recent" to true
+        )
+    )
+)
+```
+
+The `callTool` method uses `toJson()` internally to convert the arguments map.
+
+### Building Custom Requests
+
+```kotlin
+val params = mapOf(
+    "temperature" to 0.7,
+    "max_tokens" to 1000,
+    "messages" to listOf(
+        mapOf("role" to "user", "content" to "Hello")
+    )
+)
+
+val jsonParams = JsonObject(params.toJson())
+
+val request = CustomRequest(
+    method = Method.Custom("ai/generate"),
+    params = CustomRequestParams(jsonParams)
+)
+```
+
+## Error Handling
+
+### Fallback Behavior
+
+If conversion fails for any reason, the value is converted to a JSON string using `toString()`:
+
+```kotlin
+class CustomType(val value: String)
+
+val map = mapOf(
+    "custom" to CustomType("data")
+)
+
+val json = map.toJson()
+// {
+//   "custom": "CustomType(value=data)"  // toString() result
+// }
+```
+
+### Serialization Errors
+
+When using `McpJson` directly, handle serialization errors:
+
+```kotlin
+try {
+    val json = McpJson.encodeToString(data)
+} catch (e: SerializationException) {
+    logger.error("Failed to serialize data", e)
+}
+```
+
+## Best Practices
+
+### Use Type-Safe APIs When Possible
+
+Prefer type-safe data classes over raw maps:
+
+```kotlin
+// Preferred
+@Serializable
+data class WeatherParams(
+    val location: String,
+    val units: String,
+    val days: Int
+)
+
+val params = WeatherParams(
+    location = "San Francisco",
+    units = "fahrenheit",
+    days = 5
+)
+```
+
+### Use Maps for Dynamic Data
+
+Use `toJson()` for dynamic or user-provided data:
+
+```kotlin
+// When you need flexibility
+val params = userInputMap.toJson()
+val request = CallToolRequest(
+    CallToolRequestParams(
+        name = toolName,
+        arguments = JsonObject(params)
+    )
+)
+```
+
+### Consistent JSON Configuration
+
+Always use `McpJson` for MCP-related serialization:
+
+```kotlin
+// Good
+val json = McpJson.encodeToString(request)
+
+// Avoid - may have incompatible settings
+val json = Json.encodeToString(request)
+```
+
+## See Also
+
+- [Types](/api/core/types) - MCP type system
+- [Protocol](/api/core/protocol) - Protocol implementation
+- [Kotlinx Serialization JSON](https://github.com/Kotlin/kotlinx.serialization/blob/master/docs/json.md) - JSON serialization documentation
+- [Dokka: jsonUtils.kt](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-core/io.modelcontextprotocol.kotlin.sdk.types/index.html)

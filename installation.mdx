@@ -1,0 +1,191 @@
+---
+title: Installation
+description: Add the MCP Kotlin SDK to your project
+---
+
+The MCP Kotlin SDK is published to Maven Central and supports Kotlin Multiplatform projects targeting JVM, Native, JS, and Wasm.
+
+## Available Artifacts
+
+Choose the artifact that matches your needs:
+
+<CardGroup cols={3}>
+  <Card title="kotlin-sdk" icon="box">
+    **Umbrella SDK**
+    
+    Includes both client and server APIs
+  </Card>
+  <Card title="kotlin-sdk-client" icon="arrow-right">
+    **Client Only**
+    
+    For applications that connect to MCP servers
+  </Card>
+  <Card title="kotlin-sdk-server" icon="server">
+    **Server Only**
+    
+    For applications that expose MCP endpoints
+  </Card>
+</CardGroup>
+
+## Gradle Setup (JVM)
+
+For JVM-only projects, add the SDK to your `build.gradle.kts`:
+
+<Steps>
+  <Step title="Add Maven Central repository">
+    ```kotlin build.gradle.kts
+    repositories {
+        mavenCentral()
+    }
+    ```
+  </Step>
+
+  <Step title="Add the SDK dependency">
+    <CodeGroup>
+      ```kotlin Full SDK (Client + Server)
+      dependencies {
+          implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+      }
+      ```
+
+      ```kotlin Client Only
+      dependencies {
+          implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+      }
+      ```
+
+      ```kotlin Server Only
+      dependencies {
+          implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+      }
+      ```
+    </CodeGroup>
+
+    <Note>
+      Check the [Maven Central](https://central.sonatype.com/artifact/io.modelcontextprotocol/kotlin-sdk) badge in the README for the latest version.
+    </Note>
+  </Step>
+</Steps>
+
+## Multiplatform Projects
+
+For Kotlin Multiplatform projects, add the SDK to your `commonMain` source set:
+
+```kotlin build.gradle.kts
+kotlin {
+    sourceSets {
+        commonMain {
+            dependencies {
+                // Works as a common dependency across all platforms
+                implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+            }
+        }
+    }
+}
+```
+
+<Tip>
+  The SDK supports JVM, Native (iOS, macOS, Linux, Windows), JS (browser and Node.js), and Wasm targets.
+</Tip>
+
+## Ktor Dependencies
+
+The MCP SDK uses [Ktor](https://ktor.io/) for HTTP transport but **does not include Ktor engines transitively**. You must add the appropriate Ktor dependencies for your use case.
+
+<Warning>
+  Without Ktor dependencies, HTTP-based transports (SSE, Streamable HTTP, WebSocket) will not work.
+</Warning>
+
+### Client Dependencies
+
+For MCP clients using HTTP transports:
+
+<CodeGroup>
+  ```kotlin JVM (CIO Engine)
+  dependencies {
+      implementation("io.ktor:ktor-client-cio:$ktorVersion")
+      implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+  }
+  ```
+
+  ```kotlin Native (Darwin Engine)
+  dependencies {
+      implementation("io.ktor:ktor-client-darwin:$ktorVersion")
+      implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+  }
+  ```
+
+  ```kotlin JS/Wasm (JS Engine)
+  dependencies {
+      implementation("io.ktor:ktor-client-js:$ktorVersion")
+      implementation("io.modelcontextprotocol:kotlin-sdk-client:$mcpVersion")
+  }
+  ```
+</CodeGroup>
+
+<Note>
+  For SSE transport, you also need: `implementation("io.ktor:ktor-client-sse:$ktorVersion")`
+</Note>
+
+### Server Dependencies
+
+For MCP servers using HTTP transports:
+
+<CodeGroup>
+  ```kotlin CIO Engine
+  dependencies {
+      implementation("io.ktor:ktor-server-cio:$ktorVersion")
+      implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+  }
+  ```
+
+  ```kotlin Netty Engine
+  dependencies {
+      implementation("io.ktor:ktor-server-netty:$ktorVersion")
+      implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+  }
+  ```
+</CodeGroup>
+
+<Tip>
+  For SSE transport on the server, add: `implementation("io.ktor:ktor-server-sse:$ktorVersion")`
+</Tip>
+
+### Recommended Ktor Version
+
+The SDK is tested with Ktor 3.x. Check the [Ktor documentation](https://ktor.io/docs/server-dependencies.html) for the latest versions.
+
+```kotlin gradle.properties
+ktorVersion=3.0.0
+```
+
+## STDIO Transport
+
+If you're only using STDIO transport (process-based communication), you don't need Ktor dependencies:
+
+```kotlin build.gradle.kts
+dependencies {
+    // STDIO transport works without Ktor
+    implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+}
+```
+
+## Verify Installation
+
+After adding dependencies, verify your setup by importing the SDK:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+
+fun main() {
+    println("MCP Kotlin SDK installed successfully!")
+}
+```
+
+## Next Steps
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Learn how to create your first MCP client and server
+</Card>

@@ -1,0 +1,464 @@
+---
+title: Ktor Integration
+description: Host MCP servers using Ktor with support for SSE, Streamable HTTP, and WebSocket transports
+---
+
+The MCP Kotlin SDK provides seamless integration with [Ktor](https://ktor.io/), enabling you to host MCP servers using embedded or standalone Ktor servers with multiple transport options.
+
+## Overview
+
+Ktor integration is provided by the `kotlin-sdk-server` module and includes:
+
+- **Application-level** and **Route-level** extensions
+- Built-in support for SSE, Streamable HTTP, and WebSocket transports
+- Automatic session management
+- CORS configuration helpers
+- Lifecycle management
+
+## Quick Start
+
+Add the required dependencies:
+
+```kotlin build.gradle.kts
+dependencies {
+    // MCP Server SDK
+    implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+    
+    // Ktor Server Engine (choose one)
+    implementation("io.ktor:ktor-server-netty:$ktorVersion")
+    // or
+    implementation("io.ktor:ktor-server-cio:$ktorVersion")
+    
+    // For SSE support
+    implementation("io.ktor:ktor-server-sse:$ktorVersion")
+    
+    // For WebSocket support
+    implementation("io.ktor:ktor-server-websockets:$ktorVersion")
+}
+```
+
+## SSE Transport (Legacy)
+
+Server-Sent Events transport is available for backwards compatibility with older MCP clients.
+
+### Application-Level SSE
+
+The simplest approach - installs the SSE plugin automatically and registers MCP endpoints at `/`:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        mcp {
+            Server(
+                serverInfo = Implementation(
+                    name = "example-server",
+                    version = "1.0.0"
+                ),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools(listChanged = true),
+                    ),
+                ),
+            )
+        }
+    }.start(wait = true)
+}
+```
+
+Connect via: `http://localhost:3000`
+
+### Route-Level SSE
+
+For more control, use route-level registration to host MCP alongside other routes:
+
+```kotlin
+import io.ktor.server.application.install
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.routing.route
+import io.ktor.server.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        install(SSE)  // Required for route-level SSE
+        
+        routing {
+            route("/api/mcp") {
+                mcp { 
+                    Server(
+                        serverInfo = Implementation(name = "ExampleServer", version = "1.0"),
+                        options = ServerOptions(capabilities = ServerCapabilities()),
+                    )
+                }
+            }
+        }
+    }.start(wait = true)
+}
+```
+
+Connect via: `http://localhost:3000/api/mcp`
+
+<Note>
+  **Important**: When using route-level SSE, you must manually install the SSE plugin with `install(SSE)` at the application level.
+</Note>
+
+## Streamable HTTP Transport (Recommended)
+
+Streamable HTTP is the **recommended transport** for remote deployments. It provides a single HTTP endpoint with optional JSON-only or SSE streaming responses.
+
+### Stateful Streamable HTTP
+
+Maintains session state between requests:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        mcpStreamableHttp(path = "/mcp") {
+            Server(
+                serverInfo = Implementation(
+                    name = "example-server",
+                    version = "1.0.0"
+                ),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        prompts = ServerCapabilities.Prompts(listChanged = true),
+                        resources = ServerCapabilities.Resources(subscribe = true, listChanged = true),
+                        tools = ServerCapabilities.Tools(listChanged = true),
+                    ),
+                ),
+            )
+        }
+    }.start(wait = true)
+}
+```
+
+Connect via: `http://localhost:3000/mcp`
+
+### Stateless Streamable HTTP
+
+Creates a new session for each request (useful for serverless environments):
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStatelessStreamableHttp
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        mcpStatelessStreamableHttp(path = "/mcp") {
+            Server(
+                serverInfo = Implementation(
+                    name = "stateless-server",
+                    version = "1.0.0"
+                ),
+                options = ServerOptions(
+                    capabilities = ServerCapabilities(
+                        tools = ServerCapabilities.Tools(),
+                    ),
+                ),
+            )
+        }
+    }.start(wait = true)
+}
+```
+
+### Choosing Between Stateful and Stateless
+
+| Feature                    | Stateful                | Stateless               |
+|----------------------------|-------------------------|-------------------------|
+| Session persistence        | ✅ Maintained           | ❌ New per request      |
+| Memory usage               | Higher                  | Lower                   |
+| Serverless-friendly        | ❌                      | ✅                      |
+| Subscriptions              | ✅ Supported            | ⚠️ Limited             |
+| Notifications              | ✅ Supported            | ⚠️ Limited             |
+| Use case                   | Long-lived connections  | Stateless APIs          |
+
+## WebSocket Transport
+
+For full-duplex, low-latency connections:
+
+```kotlin
+import io.ktor.server.application.install
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.routing.routing
+import io.modelcontextprotocol.kotlin.sdk.server.mcpWebSocket
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        install(WebSockets)
+        
+        routing {
+            mcpWebSocket("/ws") {
+                Server(
+                    serverInfo = Implementation(
+                        name = "websocket-server",
+                        version = "1.0.0"
+                    ),
+                    options = ServerOptions(
+                        capabilities = ServerCapabilities(
+                            tools = ServerCapabilities.Tools(listChanged = true),
+                        ),
+                    ),
+                )
+            }
+        }
+    }.start(wait = true)
+}
+```
+
+Connect via: `ws://localhost:3000/ws`
+
+## CORS Configuration
+
+For web clients, enable CORS:
+
+```kotlin
+import io.ktor.http.HttpMethod
+import io.ktor.server.application.install
+import io.ktor.server.plugins.cors.routing.CORS
+
+fun Application.configureCORS() {
+    install(CORS) {
+        allowMethod(HttpMethod.Options)
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Delete)
+        allowNonSimpleContentTypes = true
+        
+        // For development only - restrict in production
+        anyHost()
+        
+        // Production example:
+        // allowHost("example.com")
+        // allowHost("example.com", schemes = listOf("https"))
+    }
+}
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        configureCORS()
+        
+        mcpStreamableHttp("/mcp") {
+            // Your server configuration
+        }
+    }.start(wait = true)
+}
+```
+
+<Warning>
+  **Security**: `anyHost()` should only be used in development. In production, explicitly allow only trusted domains.
+</Warning>
+
+## Multiple Transport Support
+
+Host multiple transports on the same server:
+
+```kotlin
+import io.ktor.server.routing.routing
+
+fun main() {
+    embeddedServer(CIO, port = 3000) {
+        install(SSE)
+        install(WebSockets)
+        install(CORS) { /* ... */ }
+        
+        routing {
+            // SSE endpoint
+            route("/sse") {
+                mcp { createServer() }
+            }
+            
+            // WebSocket endpoint
+            mcpWebSocket("/ws") { createServer() }
+        }
+        
+        // Streamable HTTP endpoint
+        mcpStreamableHttp("/mcp") { createServer() }
+        
+    }.start(wait = true)
+}
+
+private fun createServer() = Server(
+    serverInfo = Implementation(
+        name = "multi-transport-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools(listChanged = true),
+        ),
+    ),
+)
+```
+
+Clients can now connect via:
+- SSE: `http://localhost:3000/sse`
+- WebSocket: `ws://localhost:3000/ws`
+- Streamable HTTP: `http://localhost:3000/mcp`
+
+## Complete Example
+
+Here's a complete server from the samples with tools, prompts, and resources:
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+fun main() {
+    val server = Server(
+        Implementation(
+            name = "mcp-kotlin test server",
+            version = "0.1.0",
+        ),
+        ServerOptions(
+            capabilities = ServerCapabilities(
+                prompts = ServerCapabilities.Prompts(listChanged = true),
+                resources = ServerCapabilities.Resources(subscribe = true, listChanged = true),
+                tools = ServerCapabilities.Tools(listChanged = true),
+            ),
+        ),
+    )
+
+    // Add a prompt
+    server.addPrompt(
+        name = "Kotlin Developer",
+        description = "Develop small kotlin applications",
+        arguments = listOf(
+            PromptArgument(
+                name = "Project Name",
+                description = "Project name for the new project",
+                required = true,
+            ),
+        ),
+    ) { request ->
+        GetPromptResult(
+            messages = listOf(
+                PromptMessage(
+                    role = Role.User,
+                    content = TextContent(
+                        "Develop a kotlin project named <name>${request.arguments?.get("Project Name")}</name>",
+                    ),
+                ),
+            ),
+            description = "Description for ${request.name}",
+        )
+    }
+
+    // Add a tool
+    server.addTool(
+        name = "kotlin-sdk-tool",
+        description = "A test tool",
+    ) { _ ->
+        CallToolResult(
+            content = listOf(TextContent("Hello, world!")),
+        )
+    }
+
+    // Add a resource
+    server.addResource(
+        uri = "https://search.com/",
+        name = "Web Search",
+        description = "Web search engine",
+        mimeType = "text/html",
+    ) { request ->
+        ReadResourceResult(
+            contents = listOf(
+                TextResourceContents("Placeholder content for ${request.uri}", request.uri, "text/html"),
+            ),
+        )
+    }
+
+    embeddedServer(CIO, host = "127.0.0.1", port = 3000) {
+        mcp { server }
+    }.start(wait = true)
+}
+```
+
+## Session Management
+
+The Ktor extensions automatically handle session creation and cleanup:
+
+```kotlin
+// Sessions are created automatically per connection
+mcp {
+    Server(/* ... */)
+}
+
+// Access session in server callbacks
+server.onClose {
+    println("Session closed")
+}
+```
+
+## Testing with MCP Inspector
+
+```bash
+# SSE transport
+npx @modelcontextprotocol/inspector --connect http://localhost:3000
+
+# Streamable HTTP
+npx @modelcontextprotocol/inspector --connect http://localhost:3000/mcp
+
+# WebSocket
+npx @modelcontextprotocol/inspector --connect ws://localhost:3000/ws
+```
+
+## Best Practices
+
+1. **Use Streamable HTTP for production**: It's the most flexible and works well with proxies
+2. **Enable CORS carefully**: Only allow trusted origins in production
+3. **Choose stateless for serverless**: Stateless Streamable HTTP works better in FaaS environments
+4. **Use route-level extensions**: Provides more flexibility for complex applications
+5. **Implement lifecycle handlers**: Use `server.onClose {}` for cleanup logic
+6. **Configure timeouts**: Set appropriate timeouts for your use case
+
+## Deployment
+
+### Docker Example
+
+```dockerfile
+FROM gradle:8.5-jdk17 AS build
+WORKDIR /app
+COPY . .
+RUN gradle build --no-daemon
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /app/build/libs/*-all.jar app.jar
+EXPOSE 3000
+CMD ["java", "-jar", "app.jar"]
+```
+
+### Environment Configuration
+
+```kotlin
+val port = System.getenv("PORT")?.toIntOrNull() ?: 3000
+val host = System.getenv("HOST") ?: "0.0.0.0"
+
+embeddedServer(CIO, host = host, port = port) {
+    mcpStreamableHttp("/mcp") { /* ... */ }
+}.start(wait = true)
+```
+
+## Resources
+
+- [Ktor Server Documentation](https://ktor.io/docs/server.html)
+- [SSE Plugin](https://ktor.io/docs/server-sent-events.html)
+- [WebSocket Plugin](https://ktor.io/docs/server-websockets.html)
+- [CORS Plugin](https://ktor.io/docs/server-cors.html)
+- [Sample Server Code](https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples/kotlin-mcp-server)

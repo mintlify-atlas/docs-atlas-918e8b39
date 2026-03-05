@@ -1,0 +1,340 @@
+---
+title: Transport
+description: Abstract transport layer for MCP communication
+---
+
+The `Transport` interface defines the minimal contract for MCP communication channels. It provides an abstraction over different communication mechanisms (STDIO, WebSocket, SSE, etc.).
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.shared
+```
+
+## Interface Definition
+
+```kotlin
+interface Transport
+```
+
+## Methods
+
+### start
+
+Starts processing messages on the transport, including any connection steps.
+
+```kotlin
+suspend fun start()
+```
+
+This method should only be called after callbacks (`onMessage`, `onError`, `onClose`) are installed, or else messages may be lost.
+
+The method waits for the initialization flow to complete and then returns, so the transport is ready to send and receive user messages.
+
+<Note>
+  When using `Client`, `Server`, or `Protocol` classes, you should NOT call `start()` explicitly as they will call it automatically during `connect()`.
+</Note>
+
+**Example:**
+
+```kotlin
+val transport = StdioClientTransport(input, output)
+transport.onMessage { message -> handleMessage(message) }
+transport.onError { error -> handleError(error) }
+transport.onClose { cleanup() }
+transport.start() // Blocks until transport is ready
+```
+
+### send
+
+Sends a JSON-RPC message (request, response, or notification).
+
+```kotlin
+suspend fun send(
+    message: JSONRPCMessage,
+    options: TransportSendOptions? = null
+)
+```
+
+<ParamField path="message" type="JSONRPCMessage" required>
+  The JSON-RPC message to send. Can be a request, response, notification, or error.
+</ParamField>
+
+<ParamField path="options" type="TransportSendOptions">
+  Optional transport-specific options that control sending behavior. Different transports may support different options.
+</ParamField>
+
+**Example:**
+
+```kotlin
+val request = JSONRPCRequest(
+    id = RequestId.StringId("req-1"),
+    method = "tools/list",
+    params = null
+)
+transport.send(request)
+```
+
+### close
+
+Closes the transport and releases resources.
+
+```kotlin
+suspend fun close()
+```
+
+After calling `close()`, the transport should invoke the `onClose` callback.
+
+**Example:**
+
+```kotlin
+transport.close()
+```
+
+### onMessage
+
+Registers a callback for received messages.
+
+```kotlin
+fun onMessage(block: suspend (JSONRPCMessage) -> Unit)
+```
+
+<ParamField path="block" type="suspend (JSONRPCMessage) -> Unit" required>
+  Suspend function invoked when a message is received
+</ParamField>
+
+**Example:**
+
+```kotlin
+transport.onMessage { message ->
+    when (message) {
+        is JSONRPCRequest -> handleRequest(message)
+        is JSONRPCResponse -> handleResponse(message)
+        is JSONRPCNotification -> handleNotification(message)
+        is JSONRPCError -> handleError(message)
+        else -> {}
+    }
+}
+```
+
+### onError
+
+Registers a callback for transport errors.
+
+```kotlin
+fun onError(block: (Throwable) -> Unit)
+```
+
+<ParamField path="block" type="(Throwable) -> Unit" required>
+  Function invoked when an error occurs
+</ParamField>
+
+Note that errors are not necessarily fatal; they are used for reporting exceptional conditions out of band.
+
+**Example:**
+
+```kotlin
+transport.onError { error ->
+    logger.error("Transport error: ${error.message}", error)
+}
+```
+
+### onClose
+
+Registers a callback for connection closure.
+
+```kotlin
+fun onClose(block: () -> Unit)
+```
+
+<ParamField path="block" type="() -> Unit" required>
+  Function invoked when the connection closes for any reason, including explicit `close()` calls
+</ParamField>
+
+**Example:**
+
+```kotlin
+transport.onClose {
+    println("Connection closed")
+    cleanup()
+}
+```
+
+## Supporting Types
+
+### TransportSendOptions
+
+Options for sending messages.
+
+```kotlin
+open class TransportSendOptions(
+    val relatedRequestId: RequestId? = null,
+    val resumptionToken: String? = null,
+    val onResumptionToken: ((String) -> Unit)? = null
+)
+```
+
+<ParamField path="relatedRequestId" type="RequestId">
+  Used to indicate to the transport which incoming request to associate this outgoing message with. Some transports use this for routing responses.
+</ParamField>
+
+<ParamField path="resumptionToken" type="String">
+  The resumption token used to continue long-running requests that were interrupted. This allows clients to reconnect and continue from where they left off, if supported by the transport.
+</ParamField>
+
+<ParamField path="onResumptionToken" type="(String) -> Unit">
+  A callback that is invoked when the resumption token changes, if supported by the transport. This allows clients to persist the latest token for potential reconnection.
+</ParamField>
+
+## Transport Implementations
+
+The SDK provides several transport implementations:
+
+### Server Transports
+
+- **[StdioServerTransport](/api/server/transports#stdio)** - Standard input/output communication
+- **[SseServerTransport](/api/server/transports#sse)** - Server-Sent Events for Ktor servers
+- **[WebSocketMcpServerTransport](/api/server/transports#websocket)** - WebSocket for Ktor servers
+- **[StreamableHttpServerTransport](/api/server/transports#streamable-http)** - HTTP with streaming
+
+### Client Transports
+
+- **[StdioClientTransport](/api/client/transports#stdio)** - Standard input/output communication
+- **[SseClientTransport](/api/client/transports#sse)** - Server-Sent Events with Ktor client
+- **[WebSocketClientTransport](/api/client/transports#websocket)** - WebSocket with Ktor client
+- **[StreamableHttpClientTransport](/api/client/transports#streamable-http)** - HTTP with streaming
+
+### Testing Transports
+
+- **[ChannelTransport](/api/testing/channel-transport)** - In-memory channel-based transport for testing
+
+## Usage Patterns
+
+### With Protocol Classes
+
+Most applications use transports through the `Client` or `Server` classes:
+
+```kotlin
+val transport = StdioClientTransport(input, output)
+val client = Client(clientInfo, options)
+client.connect(transport) // Automatically calls transport.start()
+```
+
+### Direct Usage
+
+For custom protocol implementations:
+
+```kotlin
+val transport = StdioServerTransport(input, output)
+
+transport.onMessage { message ->
+    // Handle incoming message
+    val response = processMessage(message)
+    transport.send(response)
+}
+
+transport.onError { error ->
+    logger.error("Error: $error")
+}
+
+transport.onClose {
+    println("Connection closed")
+}
+
+transport.start()
+```
+
+### Custom Transport Implementation
+
+Implement the `Transport` interface for custom communication channels:
+
+```kotlin
+class CustomTransport : Transport {
+    private var messageHandler: (suspend (JSONRPCMessage) -> Unit)? = null
+    private var errorHandler: ((Throwable) -> Unit)? = null
+    private var closeHandler: (() -> Unit)? = null
+
+    override suspend fun start() {
+        // Initialize connection
+        startReceiving()
+    }
+
+    override suspend fun send(message: JSONRPCMessage, options: TransportSendOptions?) {
+        // Send message
+        val json = McpJson.encodeToString(message)
+        writeToChannel(json)
+    }
+
+    override suspend fun close() {
+        // Cleanup
+        closeChannel()
+        closeHandler?.invoke()
+    }
+
+    override fun onMessage(block: suspend (JSONRPCMessage) -> Unit) {
+        messageHandler = block
+    }
+
+    override fun onError(block: (Throwable) -> Unit) {
+        errorHandler = block
+    }
+
+    override fun onClose(block: () -> Unit) {
+        closeHandler = block
+    }
+
+    private suspend fun startReceiving() {
+        // Message receiving loop
+        while (isActive) {
+            val json = readFromChannel()
+            val message = McpJson.decodeFromString<JSONRPCMessage>(json)
+            messageHandler?.invoke(message)
+        }
+    }
+}
+```
+
+## Thread Safety
+
+Transport implementations should:
+
+- Be safe to call `send()` from multiple coroutines
+- Serialize outgoing messages to prevent interleaving
+- Handle cancellation gracefully
+- Invoke callbacks on appropriate dispatchers
+
+## Lifecycle
+
+Typical transport lifecycle:
+
+1. **Create** - Instantiate transport with connection parameters
+2. **Configure** - Register `onMessage`, `onError`, `onClose` callbacks
+3. **Start** - Call `start()` to begin processing (blocks until ready)
+4. **Exchange** - Send and receive messages via `send()` and message callback
+5. **Close** - Call `close()` to shutdown cleanly
+
+```kotlin
+// 1. Create
+val transport = StdioClientTransport(input, output)
+
+// 2. Configure
+transport.onMessage { handleMessage(it) }
+transport.onError { handleError(it) }
+transport.onClose { cleanup() }
+
+// 3. Start
+transport.start()
+
+// 4. Exchange
+transport.send(request)
+
+// 5. Close
+transport.close()
+```
+
+## See Also
+
+- [Protocol](/api/core/protocol) - Protocol implementation using transports
+- [Server Transports](/api/server/transports) - Server-side transport implementations
+- [Client Transports](/api/client/transports) - Client-side transport implementations
+- [Dokka: Transport](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-core/io.modelcontextprotocol.kotlin.sdk.shared/-transport/index.html)

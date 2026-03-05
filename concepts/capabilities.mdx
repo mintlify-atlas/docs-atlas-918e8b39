@@ -1,0 +1,409 @@
+---
+title: Capabilities
+description: Server and client capability declarations in the MCP Kotlin SDK
+---
+
+Capabilities define what features a server or client supports. They are declared during initialization and determine what operations are available in an MCP session.
+
+## Overview
+
+Both clients and servers declare capabilities during the initialization handshake. These declarations:
+
+- **Advertise supported features** to the other party
+- **Enable feature detection** for graceful degradation
+- **Support future extensibility** through experimental capabilities
+- **Are advisory only** - the other party may ignore or partially support them
+
+## Server Capabilities
+
+Servers declare their capabilities to inform clients what features they provide.
+
+### Capability Reference
+
+| Capability     | Feature Flags                 | Description                                                |
+|----------------|-------------------------------|------------------------------------------------------------||
+| `prompts`      | `listChanged`                 | Prompt template management and notifications               |
+| `resources`    | `subscribe`<br/>`listChanged` | Resource exposure, subscriptions, and update notifications |
+| `tools`        | `listChanged`                 | Tool discovery, execution, and list change notifications   |
+| `logging`      | -                             | Server logging to client console                           |
+| `completions`  | -                             | Argument autocompletion suggestions                        |
+| `experimental` | Custom properties             | Non-standard experimental features                         |
+
+### Declaring Server Capabilities
+
+```kotlin
+val server = Server(
+    serverInfo = Implementation(
+        name = "example-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            prompts = ServerCapabilities.Prompts(
+                listChanged = true
+            ),
+            resources = ServerCapabilities.Resources(
+                subscribe = true,
+                listChanged = true
+            ),
+            tools = ServerCapabilities.Tools(
+                listChanged = true
+            ),
+            logging = ServerCapabilities.Logging,
+            completions = ServerCapabilities.Completions
+        )
+    )
+)
+```
+
+### Prompts Capability
+
+Enables prompt template discovery and retrieval.
+
+```kotlin
+capabilities = ServerCapabilities(
+    prompts = ServerCapabilities.Prompts(
+        listChanged = true  // Server will notify when prompts change
+    )
+)
+```
+
+**Feature flags:**
+- `listChanged`: Server sends `notifications/prompts/list_changed` when the prompt catalog changes
+
+**When to use:**
+- Set `listChanged = true` only if your prompt catalog can change at runtime
+- Omit the capability entirely if you don't provide prompts
+
+### Resources Capability
+
+Enables resource discovery, reading, and subscriptions.
+
+```kotlin
+capabilities = ServerCapabilities(
+    resources = ServerCapabilities.Resources(
+        subscribe = true,      // Clients can subscribe to resource updates
+        listChanged = true     // Server will notify when resource list changes
+    )
+)
+```
+
+**Feature flags:**
+- `subscribe`: Server supports `resources/subscribe` and sends `notifications/resources/updated` for specific URIs
+- `listChanged`: Server sends `notifications/resources/list_changed` when the catalog changes
+
+**When to use:**
+- Set `subscribe = true` if you emit update notifications for individual resources
+- Set `listChanged = true` if your resource catalog can change at runtime
+
+### Tools Capability
+
+Enables tool discovery and execution.
+
+```kotlin
+capabilities = ServerCapabilities(
+    tools = ServerCapabilities.Tools(
+        listChanged = true  // Server will notify when tools change
+    )
+)
+```
+
+**Feature flags:**
+- `listChanged`: Server sends `notifications/tools/list_changed` when tools are added, modified, or removed
+
+**When to use:**
+- Set `listChanged = true` only if your tool catalog can change at runtime
+- Most servers have static tool sets and can omit this flag
+
+### Logging Capability
+
+Enables server-to-client logging.
+
+```kotlin
+capabilities = ServerCapabilities(
+    logging = ServerCapabilities.Logging
+)
+```
+
+**Logging levels** (RFC 5424):
+- `debug` - Detailed debugging information
+- `info` - Informational messages
+- `notice` - Normal but significant conditions
+- `warning` - Warning conditions
+- `error` - Error conditions
+- `critical` - Critical conditions
+- `alert` - Action must be taken immediately
+- `emergency` - System is unusable
+
+**Example:**
+
+```kotlin
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Info,
+            logger = "startup",
+            data = buildJsonObject {
+                put("message", "Server started")
+            }
+        )
+    )
+)
+```
+
+### Completions Capability
+
+Enables argument autocompletion for prompts and resources.
+
+```kotlin
+capabilities = ServerCapabilities(
+    completions = ServerCapabilities.Completions
+)
+```
+
+**Example handler:**
+
+```kotlin
+session.setRequestHandler<CompleteRequest>(
+    Method.Defined.CompletionComplete
+) { request, _ ->
+    val options = listOf("kotlin", "compose", "coroutine")
+    val matches = options.filter {
+        it.startsWith(request.argument.value.lowercase())
+    }
+
+    CompleteResult(
+        completion = CompleteResult.Completion(
+            values = matches.take(3),
+            total = matches.size,
+            hasMore = matches.size > 3
+        )
+    )
+}
+```
+
+### Experimental Capabilities
+
+Custom capabilities for non-standard features.
+
+```kotlin
+capabilities = ServerCapabilities(
+    experimental = buildJsonObject {
+        putJsonObject("customFeature") {
+            put("version", "1.0")
+            put("enabled", true)
+        }
+    }
+)
+```
+
+## Client Capabilities
+
+Clients declare their capabilities to inform servers what features they support.
+
+### Capability Reference
+
+| Capability     | Feature Flags     | Description                                                 |
+|----------------|-------------------|-------------------------------------------------------------|
+| `sampling`     | -                 | Client can sample from an LLM (execute model requests)      |
+| `roots`        | `listChanged`     | Client exposes root directories and can notify of changes   |
+| `elicitation`  | -                 | Client can display schema/form dialogs for structured input |
+| `experimental` | Custom properties | Non-standard experimental features                          |
+
+### Declaring Client Capabilities
+
+```kotlin
+val client = Client(
+    clientInfo = Implementation(
+        name = "example-client",
+        version = "1.0.0"
+    ),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            sampling = buildJsonObject {
+                putJsonObject("tools") { }
+            },
+            roots = ClientCapabilities.Roots(
+                listChanged = true
+            )
+        )
+    )
+)
+```
+
+### Sampling Capability
+
+Enables server-requested LLM completions.
+
+```kotlin
+capabilities = ClientCapabilities(
+    sampling = buildJsonObject {
+        putJsonObject("tools") { }  // Support tool use in sampling
+    }
+)
+```
+
+**Without tool support:**
+
+```kotlin
+capabilities = ClientCapabilities(
+    sampling = ClientCapabilities.sampling  // Basic sampling only
+)
+```
+
+**Example handler:**
+
+```kotlin
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    val content = request.messages.lastOrNull()?.content
+    val prompt = if (content is TextContent) content.text else "your topic"
+
+    CreateMessageResult(
+        model = "gpt-4o-mini",
+        role = Role.Assistant,
+        content = TextContent(text = "Response about $prompt")
+    )
+}
+```
+
+### Roots Capability
+
+Enables clients to declare filesystem access boundaries.
+
+```kotlin
+capabilities = ClientCapabilities(
+    roots = ClientCapabilities.Roots(
+        listChanged = true  // Client will notify when roots change
+    )
+)
+```
+
+**Managing roots:**
+
+```kotlin
+client.addRoot(
+    uri = "file:///Users/demo/projects",
+    name = "Projects"
+)
+
+client.sendRootsListChanged()
+```
+
+**Feature flags:**
+- `listChanged`: Client sends `notifications/roots/list_changed` when roots are added or removed
+
+**Security note:** URIs **must** use `file://` scheme. This ensures servers only operate within authorized directories.
+
+### Elicitation Capability
+
+Enables servers to request structured input from users.
+
+```kotlin
+capabilities = ClientCapabilities(
+    elicitation = ClientCapabilities.elicitation
+)
+```
+
+<Note>
+Elicitation support is currently experimental. Refer to the [MCP specification](https://modelcontextprotocol.io/specification/latest) for the latest status.
+</Note>
+
+## Capability Negotiation
+
+During the initialization handshake:
+
+1. **Client initiates** with `initialize` request including its capabilities
+2. **Server responds** with its capabilities in `InitializeResult`
+3. **Client confirms** with `initialized` notification
+4. **Both parties** can now use mutually supported features
+
+```kotlin
+// Client side
+val client = Client(
+    clientInfo = Implementation("client", "1.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            sampling = ClientCapabilities.sampling
+        )
+    )
+)
+
+client.connect(transport)
+
+// Server side
+val server = Server(
+    serverInfo = Implementation("server", "1.0"),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            tools = ServerCapabilities.Tools()
+        )
+    )
+)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Be Conservative" icon="shield-halved">
+    Only declare capabilities you fully support
+  </Card>
+  <Card title="Check Capabilities" icon="check-double">
+    Verify the other party supports features before using them
+  </Card>
+  <Card title="Fail Gracefully" icon="circle-exclamation">
+    Handle missing capabilities with meaningful error messages
+  </Card>
+  <Card title="Document Extensions" icon="file-lines">
+    Clearly document any experimental capabilities
+  </Card>
+</CardGroup>
+
+### Checking Capabilities
+
+```kotlin
+// Check if server supports tool list changes
+val supportsToolChanges = serverCapabilities.tools?.listChanged == true
+
+if (supportsToolChanges) {
+    // Listen for tool list change notifications
+} else {
+    // Poll for tools periodically instead
+}
+```
+
+### Version Compatibility
+
+The protocol version is negotiated during initialization:
+
+```kotlin
+val initResult = client.initialize()
+val protocolVersion = initResult.protocolVersion
+
+when {
+    protocolVersion.startsWith("2025-") -> {
+        // Use current spec features
+    }
+    else -> {
+        // Fall back to compatible subset
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MCP Primitives" icon="cube" href="/concepts/mcp-primitives">
+    Learn what features each capability enables
+  </Card>
+  <Card title="Server Guide" icon="server" href="/server/getting-started">
+    Implement server capabilities
+  </Card>
+  <Card title="Client Guide" icon="desktop" href="/client/getting-started">
+    Handle client capabilities
+  </Card>
+  <Card title="API Reference" icon="code" href="https://kotlin.sdk.modelcontextprotocol.io/">
+    View full capability API documentation
+  </Card>
+</CardGroup>

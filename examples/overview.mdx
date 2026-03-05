@@ -1,0 +1,320 @@
+---
+title: Examples Overview
+description: Explore practical examples of the MCP Kotlin SDK in action
+---
+
+The MCP Kotlin SDK includes several complete examples demonstrating different use cases and transport mechanisms. These samples provide working code that you can use as a reference for building your own MCP clients and servers.
+
+## Available Examples
+
+| Scenario                 | Description                                                     | Example                                                                  |
+|--------------------------|-----------------------------------------------------------------|--------------------------------------------------------------------------|
+| Streamable HTTP server   | Full MCP server with prompts, resources, tools, completions     | [samples/kotlin-mcp-server](https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples/kotlin-mcp-server)                 |
+| STDIO weather server     | Minimal STDIO transport server exposing weather info and alerts | [samples/weather-stdio-server](https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples/weather-stdio-server)           |
+| Interactive STDIO client | MCP client that connects over STDIO and pipes requests to LLMs  | [samples/kotlin-mcp-client](https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples/kotlin-mcp-client)                 |
+| Streamable HTTP client   | MCP client demo in a runnable notebook                          | [samples/notebooks/McpClient.ipynb](https://github.com/modelcontextprotocol/kotlin-sdk/blob/main/samples/notebooks/McpClient.ipynb) |
+
+## Kotlin MCP Server
+
+**Location**: `samples/kotlin-mcp-server`
+
+A comprehensive server implementation demonstrating multiple capabilities:
+
+- **Transport Options**:
+  - STDIO (Standard Input/Output)
+  - SSE (Server-Sent Events) with plain configuration
+  - SSE using Ktor plugin (recommended)
+
+- **Server Capabilities**:
+  - **Prompt**: "Kotlin Developer" - helps develop small Kotlin applications with a configurable project name
+  - **Tool**: "kotlin-sdk-tool" - a simple test tool that returns a greeting
+  - **Resource**: "Web Search" - demonstrates resource handling
+
+### Running the Server
+
+```bash
+# STDIO mode (default)
+./gradlew clean build
+npx @modelcontextprotocol/inspector --config mcp-inspector-config.json --server stdio-server
+
+# SSE with Ktor plugin (recommended)
+./gradlew run --args="--sse-server-ktor 3002"
+npx @modelcontextprotocol/inspector --config mcp-inspector-config.json --server sse-ktor-server
+```
+
+### Key Code Snippets
+
+<CodeGroup>
+```kotlin Server Configuration
+val server = Server(
+    Implementation(
+        name = "mcp-kotlin test server",
+        version = "0.1.0",
+    ),
+    ServerOptions(
+        capabilities = ServerCapabilities(
+            prompts = ServerCapabilities.Prompts(listChanged = true),
+            resources = ServerCapabilities.Resources(subscribe = true, listChanged = true),
+            tools = ServerCapabilities.Tools(listChanged = true),
+        ),
+    ),
+)
+```
+
+```kotlin Adding a Prompt
+server.addPrompt(
+    name = "Kotlin Developer",
+    description = "Develop small kotlin applications",
+    arguments = listOf(
+        PromptArgument(
+            name = "Project Name",
+            description = "Project name for the new project",
+            required = true,
+        ),
+    ),
+) { request ->
+    GetPromptResult(
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(
+                    "Develop a kotlin project named <name>${request.arguments?.get("Project Name")}</name>",
+                ),
+            ),
+        ),
+        description = "Description for ${request.name}",
+    )
+}
+```
+
+```kotlin SSE Server with Ktor Plugin
+embeddedServer(CIO, host = "127.0.0.1", port = port) {
+    installCors()
+    mcp {
+        return@mcp configureServer()
+    }
+}.start(wait = true)
+```
+</CodeGroup>
+
+## Weather STDIO Server
+
+**Location**: `samples/weather-stdio-server`
+
+A practical example that provides weather information by consuming the National Weather Service API (weather.gov).
+
+- **Transport**: STDIO only
+- **Tools**:
+  - **get_forecast**: Returns weather forecast for specific latitude/longitude
+  - **get_alerts**: Returns active weather alerts for a US state
+
+### Building and Running
+
+```bash
+./gradlew clean build
+java -jar build/libs/weather-stdio-server-0.1.0-all.jar
+```
+
+### Claude Desktop Integration
+
+Add to your Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/absolute/path/to/weather-stdio-server-0.1.0-all.jar"
+      ]
+    }
+  }
+}
+```
+
+### Key Code Snippets
+
+<CodeGroup>
+```kotlin Weather Forecast Tool
+server.addTool(
+    name = "get_forecast",
+    description = """
+        Get weather forecast for a specific latitude/longitude
+    """.trimIndent(),
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            putJsonObject("latitude") {
+                put("type", "number")
+            }
+            putJsonObject("longitude") {
+                put("type", "number")
+            }
+        },
+        required = listOf("latitude", "longitude"),
+    ),
+) { request ->
+    val latitude = request.arguments?.get("latitude")?.jsonPrimitive?.doubleOrNull
+    val longitude = request.arguments?.get("longitude")?.jsonPrimitive?.doubleOrNull
+    if (latitude == null || longitude == null) {
+        return@addTool CallToolResult(
+            content = listOf(TextContent("The 'latitude' and 'longitude' parameters are required.")),
+        )
+    }
+
+    val forecast = httpClient.getForecast(latitude, longitude)
+    CallToolResult(content = forecast.map { TextContent(it) })
+}
+```
+
+```kotlin Weather Alerts Tool
+server.addTool(
+    name = "get_alerts",
+    description = """
+        Get weather alerts for a US state. Input is Two-letter US state code (e.g. CA, NY)
+    """.trimIndent(),
+    inputSchema = ToolSchema(
+        properties = buildJsonObject {
+            putJsonObject("state") {
+                put("type", "string")
+                put("description", "Two-letter US state code (e.g. CA, NY)")
+            }
+        },
+        required = listOf("state"),
+    ),
+) { request ->
+    val state = request.arguments?.get("state")?.jsonPrimitive?.content
+        ?: return@addTool CallToolResult(
+            content = listOf(TextContent("The 'state' parameter is required.")),
+        )
+
+    val alerts = httpClient.getAlerts(state)
+    CallToolResult(content = alerts.map { TextContent(it) })
+}
+```
+</CodeGroup>
+
+## Interactive STDIO Client
+
+**Location**: `samples/kotlin-mcp-client`
+
+An interactive MCP client that connects to MCP servers and integrates with Anthropic's API for natural language processing.
+
+### Features
+
+- Connects to MCP servers via STDIO transport
+- Retrieves and converts server tools to Anthropic's tool format
+- Interactive chat loop for user queries
+- Automatic tool invocation based on LLM responses
+
+### Prerequisites
+
+- Anthropic API key in `ANTHROPIC_API_KEY` environment variable
+- An MCP server (JavaScript, Python, or JAR)
+
+### Running the Client
+
+```bash
+./gradlew clean build
+
+# With different server types
+java -jar build/libs/kotlin-mcp-client.jar path/to/server.jar  # JVM server
+java -jar build/libs/kotlin-mcp-client.jar path/to/server.py  # Python server
+java -jar build/libs/kotlin-mcp-client.jar path/to/build/index.js  # Node server
+```
+
+### Key Code Snippets
+
+<CodeGroup>
+```kotlin Connecting to Server
+suspend fun connectToServer(serverScriptPath: String) {
+    // Build the command based on the file extension
+    val command = buildList {
+        when (serverScriptPath.substringAfterLast(".")) {
+            "js" -> add("node")
+            "py" -> add(if (System.getProperty("os.name").lowercase().contains("win")) "python" else "python3")
+            "jar" -> addAll(listOf("java", "-jar"))
+            else -> throw IllegalArgumentException("Server script must be a .js, .py or .jar file")
+        }
+        add(serverScriptPath)
+    }
+
+    // Start the server process
+    val process = ProcessBuilder(command).start()
+
+    // Setup I/O transport
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource().buffered(),
+        output = process.outputStream.asSink().buffered(),
+    )
+
+    // Connect and retrieve tools
+    mcp.connect(transport)
+    val toolsResult = mcp.listTools()
+    tools = toolsResult.tools.map { tool ->
+        // Convert to Anthropic tool format
+        ToolUnion.ofTool(
+            Tool.builder()
+                .name(tool.name)
+                .description(tool.description ?: "")
+                .inputSchema(/* ... */)
+                .build(),
+        )
+    }
+}
+```
+
+```kotlin Processing Queries
+suspend fun processQuery(query: String): String {
+    val messages = mutableListOf(
+        MessageParam.builder()
+            .role(MessageParam.Role.USER)
+            .content(query)
+            .build(),
+    )
+
+    // Send to Anthropic with available tools
+    val response = anthropic.messages().create(
+        messageParamsBuilder
+            .messages(messages)
+            .tools(tools)
+            .build(),
+    )
+
+    response.content().forEach { content ->
+        when {
+            content.isToolUse() -> {
+                val toolName = content.toolUse().get().name()
+                val toolArgs = content.toolUse().get()._input()
+                
+                // Call the MCP tool
+                val result = mcp.callTool(
+                    name = toolName,
+                    arguments = toolArgs ?: emptyMap(),
+                )
+                // Process result...
+            }
+        }
+    }
+}
+```
+</CodeGroup>
+
+## Streamable HTTP Client Notebook
+
+**Location**: `samples/notebooks/McpClient.ipynb`
+
+A Jupyter notebook demonstrating MCP client usage with Streamable HTTP transport. Perfect for interactive exploration and learning.
+
+### Features
+
+- Interactive notebook format
+- Streamable HTTP transport example
+- Step-by-step client implementation
+
+## Next Steps
+
+- Explore the [full source code](https://github.com/modelcontextprotocol/kotlin-sdk/tree/main/samples) for each example
+- Learn about different [transport options](/concepts/transports)
+- Understand [server capabilities](/concepts/capabilities)
+- Build your own [custom MCP server](/server/getting-started)

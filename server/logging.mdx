@@ -1,0 +1,448 @@
+---
+title: Logging
+description: Stream structured log messages from server to client
+---
+
+Logging allows your server to stream structured log messages to connected clients using RFC 5424 severity levels. Clients can display these logs in their UI, helping users debug and monitor server operations.
+
+## When to Use Logging
+
+Logging is ideal for:
+
+- Debugging server operations
+- Reporting progress for long-running tasks
+- Notifying users of warnings or errors
+- Providing operational visibility
+- Streaming diagnostic information
+
+<Warning>
+  Never log sensitive data (credentials, tokens, PII) as logs are sent to the client and may be stored or displayed.
+</Warning>
+
+## Enabling Logging Support
+
+Declare the `logging` capability in your server options:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation("example-server", "1.0.0"),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            logging = ServerCapabilities.Logging,
+        ),
+    )
+)
+```
+
+## Sending Log Messages
+
+### Basic Log Message
+
+Send a simple log message from a session:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+suspend fun main() {
+    val server = Server(
+        serverInfo = Implementation("example-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                logging = ServerCapabilities.Logging,
+            ),
+        )
+    )
+
+    val session = server.createSession(
+        StdioServerTransport(
+            inputStream = System.`in`.asSource().buffered(),
+            outputStream = System.out.asSink().buffered()
+        )
+    )
+
+    session.sendLoggingMessage(
+        LoggingMessageNotification(
+            LoggingMessageNotificationParams(
+                level = LoggingLevel.Info,
+                logger = "startup",
+                data = buildJsonObject { put("message", "Server started") },
+            ),
+        ),
+    )
+}
+```
+
+### Log Levels
+
+MCP uses RFC 5424 severity levels:
+
+<ParamField path="Emergency" type="LoggingLevel.Emergency">
+  System is unusable (highest severity)
+</ParamField>
+
+<ParamField path="Alert" type="LoggingLevel.Alert">
+  Action must be taken immediately
+</ParamField>
+
+<ParamField path="Critical" type="LoggingLevel.Critical">
+  Critical conditions
+</ParamField>
+
+<ParamField path="Error" type="LoggingLevel.Error">
+  Error conditions
+</ParamField>
+
+<ParamField path="Warning" type="LoggingLevel.Warning">
+  Warning conditions
+</ParamField>
+
+<ParamField path="Notice" type="LoggingLevel.Notice">
+  Normal but significant conditions
+</ParamField>
+
+<ParamField path="Info" type="LoggingLevel.Info">
+  Informational messages
+</ParamField>
+
+<ParamField path="Debug" type="LoggingLevel.Debug">
+  Debug-level messages (lowest severity)
+</ParamField>
+
+### Structured Log Data
+
+Send structured data in logs:
+
+```kotlin
+import kotlinx.serialization.json.JsonPrimitive
+
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Info,
+            logger = "api",
+            data = buildJsonObject {
+                put("message", "API request completed")
+                put("endpoint", "/api/users")
+                put("method", "GET")
+                put("duration_ms", 45)
+                put("status", 200)
+            },
+        ),
+    ),
+)
+```
+
+### Log from Tool Handlers
+
+Log progress or diagnostics from within tool execution:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+
+server.addTool(
+    name = "process-data",
+    description = "Process a large dataset",
+) { request ->
+    sendLoggingMessage(
+        LoggingMessageNotification(
+            LoggingMessageNotificationParams(
+                level = LoggingLevel.Info,
+                logger = "process-data",
+                data = buildJsonObject {
+                    put("message", "Starting data processing")
+                },
+            ),
+        ),
+    )
+    
+    // Process data...
+    val items = 100
+    for (i in 1..items) {
+        processItem(i)
+        
+        if (i % 10 == 0) {
+            sendLoggingMessage(
+                LoggingMessageNotification(
+                    LoggingMessageNotificationParams(
+                        level = LoggingLevel.Debug,
+                        logger = "process-data",
+                        data = buildJsonObject {
+                            put("message", "Progress: $i/$items items")
+                            put("progress", i.toDouble() / items)
+                        },
+                    ),
+                ),
+            )
+        }
+    }
+    
+    sendLoggingMessage(
+        LoggingMessageNotification(
+            LoggingMessageNotificationParams(
+                level = LoggingLevel.Info,
+                logger = "process-data",
+                data = buildJsonObject {
+                    put("message", "Processing complete")
+                },
+            ),
+        ),
+    )
+    
+    CallToolResult(
+        content = listOf(TextContent(text = "Processed $items items"))
+    )
+}
+```
+
+## Client Log Level Control
+
+Clients can set the minimum log level they want to receive:
+
+### Client Sets Log Level
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "logging/setLevel",
+  "id": 1,
+  "params": {
+    "level": "info"
+  }
+}
+```
+
+Only messages at or above this level will be sent to the client. By default, all levels are sent.
+
+### Server Respects Level
+
+The server automatically filters messages below the client's requested level:
+
+```kotlin
+// These messages respect the client's log level setting
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Debug,  // May be filtered out
+            data = JsonPrimitive("Debug details"),
+        ),
+    ),
+)
+
+session.sendLoggingMessage(
+    LoggingMessageNotification(
+        LoggingMessageNotificationParams(
+            level = LoggingLevel.Error,  // Always sent if logging enabled
+            data = JsonPrimitive("Critical error"),
+        ),
+    ),
+)
+```
+
+## Sending Logs to Specific Sessions
+
+When managing multiple sessions, send logs to a specific session:
+
+```kotlin
+// Get session ID from active sessions
+val sessions = server.sessions
+
+sessions.forEach { (sessionId, session) ->
+    server.sendLoggingMessage(
+        sessionId = sessionId.id,
+        notification = LoggingMessageNotification(
+            LoggingMessageNotificationParams(
+                level = LoggingLevel.Info,
+                logger = "broadcast",
+                data = buildJsonObject {
+                    put("message", "System maintenance in 5 minutes")
+                },
+            ),
+        ),
+    )
+}
+```
+
+## API Signatures
+
+### LoggingMessageNotification
+
+```kotlin
+data class LoggingMessageNotification(
+    val params: LoggingMessageNotificationParams
+)
+
+data class LoggingMessageNotificationParams(
+    val level: LoggingLevel,
+    val data: JsonElement,
+    val logger: String? = null,
+    val meta: JsonObject? = null
+)
+```
+
+<ParamField path="level" type="LoggingLevel" required>
+  Severity level from RFC 5424 (Debug, Info, Notice, Warning, Error, Critical, Alert, Emergency)
+</ParamField>
+
+<ParamField path="data" type="JsonElement" required>
+  Log message data. Can be a string (JsonPrimitive) or structured object (JsonObject)
+</ParamField>
+
+<ParamField path="logger" type="String">
+  Optional logger name to categorize messages (e.g., "api", "database", "startup")
+</ParamField>
+
+<ParamField path="meta" type="JsonObject">
+  Optional metadata as a JSON object
+</ParamField>
+
+### sendLoggingMessage
+
+```kotlin
+// From session
+suspend fun ServerSession.sendLoggingMessage(
+    notification: LoggingMessageNotification
+)
+
+// From server (requires session ID)
+suspend fun Server.sendLoggingMessage(
+    sessionId: String,
+    notification: LoggingMessageNotification
+)
+```
+
+## Client Message Flow
+
+<Steps>
+
+### Server Sends Log
+
+Server emits a notification:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/message",
+  "params": {
+    "level": "info",
+    "logger": "startup",
+    "data": {
+      "message": "Server started"
+    }
+  }
+}
+```
+
+### Client Receives Log
+
+Client displays the message in its UI or console.
+
+### Client Adjusts Level
+
+Client can request a higher minimum level:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "logging/setLevel",
+  "id": 1,
+  "params": {
+    "level": "warning"
+  }
+}
+```
+
+Now only Warning and higher messages are sent.
+
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Appropriate Levels" icon="signal">
+    Use Debug for detailed diagnostics, Info for normal operations, Warning for potential issues, Error for failures.
+  </Card>
+  
+  <Card title="Add Logger Names" icon="tag">
+    Use the `logger` field to categorize messages by component ("api", "database", "cache").
+  </Card>
+  
+  <Card title="Structure Your Data" icon="table">
+    Use JSON objects for structured data instead of formatting strings. This makes logs machine-readable.
+  </Card>
+  
+  <Card title="Never Log Secrets" icon="shield">
+    Never include credentials, tokens, passwords, or PII in log messages.
+  </Card>
+</CardGroup>
+
+## Performance Considerations
+
+### Conditional Logging
+
+Avoid expensive log operations for filtered levels:
+
+```kotlin
+// The SDK automatically filters messages below client's level,
+// but you can skip expensive computations:
+
+if (shouldLogDebug) {
+    val expensiveData = computeDetailedDiagnostics()
+    session.sendLoggingMessage(
+        LoggingMessageNotification(
+            LoggingMessageNotificationParams(
+                level = LoggingLevel.Debug,
+                data = JsonPrimitive(expensiveData),
+            ),
+        ),
+    )
+}
+```
+
+### Throttle High-Frequency Logs
+
+For logs in tight loops, throttle output:
+
+```kotlin
+import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
+
+var lastLogTime = 0L
+for (i in 1..10000) {
+    processItem(i)
+    
+    val now = System.currentTimeMillis()
+    if (now - lastLogTime > 1000) {  // Log at most once per second
+        session.sendLoggingMessage(
+            LoggingMessageNotification(
+                LoggingMessageNotificationParams(
+                    level = LoggingLevel.Info,
+                    data = buildJsonObject {
+                        put("message", "Processed $i items")
+                    },
+                ),
+            ),
+        )
+        lastLogTime = now
+    }
+}
+```
+
+## Related Topics
+
+- [Tools](/server/tools) - Log progress from tool execution
+- [Getting Started](/server/getting-started) - Set up your first server
+- [Resources](/server/resources) - Expose data sources

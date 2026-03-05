@@ -1,0 +1,526 @@
+---
+title: Core Types
+description: Type system for MCP protocol messages and data structures
+---
+
+The `io.modelcontextprotocol.kotlin.sdk.types` package provides the complete type system for the Model Context Protocol. All protocol messages, requests, responses, and data structures are defined here.
+
+## JSON-RPC Message Types
+
+### JSONRPCMessage
+
+Base sealed interface for all JSON-RPC 2.0 messages.
+
+```kotlin
+sealed interface JSONRPCMessage
+```
+
+**Implementations:**
+- `JSONRPCRequest` - A request expecting a response
+- `JSONRPCNotification` - A one-way message with no response
+- `JSONRPCResponse` - A successful response to a request
+- `JSONRPCError` - An error response to a request
+- `JSONRPCEmptyMessage` - Empty/keepalive message
+
+### JSONRPCRequest
+
+Represents a request that expects a response.
+
+```kotlin
+@Serializable
+data class JSONRPCRequest(
+    val jsonrpc: String = JSONRPC_VERSION,
+    val id: RequestId,
+    val method: String,
+    val params: JsonElement? = null
+)
+```
+
+<ParamField path="id" type="RequestId" required>
+  Unique identifier for this request. Can be a string or number.
+</ParamField>
+
+<ParamField path="method" type="String" required>
+  The method name to call (e.g., "tools/call", "resources/read")
+</ParamField>
+
+<ParamField path="params" type="JsonElement">
+  Optional parameters for the method
+</ParamField>
+
+### JSONRPCResponse
+
+Represents a successful response.
+
+```kotlin
+@Serializable
+data class JSONRPCResponse(
+    val jsonrpc: String = JSONRPC_VERSION,
+    val id: RequestId,
+    val result: RequestResult
+)
+```
+
+### JSONRPCError
+
+Represents an error response.
+
+```kotlin
+@Serializable
+data class JSONRPCError(
+    val jsonrpc: String = JSONRPC_VERSION,
+    val id: RequestId?,
+    val error: RPCError
+)
+```
+
+## Request and Response Types
+
+### Request
+
+Base interface for all protocol requests.
+
+```kotlin
+sealed interface Request {
+    val method: Method
+    val params: RequestParams?
+    fun toJSON(): JSONRPCRequest
+}
+```
+
+**Common Request Types:**
+- `InitializeRequest` - Initialize the connection
+- `PingRequest` - Check connectivity
+- `ListToolsRequest` - List available tools
+- `CallToolRequest` - Execute a tool
+- `ListPromptsRequest` - List available prompts
+- `GetPromptRequest` - Get a specific prompt
+- `ListResourcesRequest` - List available resources
+- `ReadResourceRequest` - Read a resource
+
+### Notification
+
+Base interface for one-way notifications.
+
+```kotlin
+sealed interface Notification {
+    val method: Method
+    val params: NotificationParams?
+    fun toJSON(): JSONRPCNotification
+}
+```
+
+**Common Notification Types:**
+- `InitializedNotification` - Sent after initialization completes
+- `ProgressNotification` - Progress update for long-running operations
+- `CancelledNotification` - Cancel an in-flight request
+- `LoggingMessageNotification` - Server log message
+- `ResourceUpdatedNotification` - A resource was updated
+
+### RequestResult
+
+Base interface for all request results.
+
+```kotlin
+sealed interface RequestResult : WithMeta
+```
+
+**Common Result Types:**
+- `EmptyResult` - Success with no data
+- `InitializeResult` - Initialization response
+- `ListToolsResult` - List of available tools
+- `CallToolResult` - Tool execution result
+- `GetPromptResult` - Prompt content
+- `ReadResourceResult` - Resource content
+
+## Core Data Types
+
+### Implementation
+
+Describes an MCP implementation (client or server).
+
+```kotlin
+@Serializable
+data class Implementation(
+    val name: String,
+    val version: String
+)
+```
+
+<ParamField path="name" type="String" required>
+  Name of the implementation (e.g., "my-mcp-server")
+</ParamField>
+
+<ParamField path="version" type="String" required>
+  Version string (e.g., "1.0.0")
+</ParamField>
+
+### Method
+
+Represents a protocol method.
+
+```kotlin
+sealed interface Method {
+    val value: String
+    
+    data class Custom(override val value: String) : Method
+    
+    enum class Defined(override val value: String) : Method {
+        Initialize("initialize"),
+        Ping("ping"),
+        ToolsList("tools/list"),
+        ToolsCall("tools/call"),
+        PromptsList("prompts/list"),
+        PromptsGet("prompts/get"),
+        ResourcesList("resources/list"),
+        ResourcesRead("resources/read"),
+        // ... and more
+    }
+}
+```
+
+### RequestId
+
+Unique identifier for JSON-RPC requests.
+
+```kotlin
+sealed interface RequestId {
+    data class StringId(val value: String) : RequestId
+    data class NumberId(val value: Long) : RequestId
+}
+```
+
+### RPCError
+
+Represents a JSON-RPC error.
+
+```kotlin
+@Serializable
+data class RPCError(
+    val code: Int,
+    val message: String,
+    val data: JsonObject? = null
+)
+```
+
+<ParamField path="code" type="Int" required>
+  Error code (e.g., -32600 for Invalid Request)
+</ParamField>
+
+<ParamField path="message" type="String" required>
+  Human-readable error message
+</ParamField>
+
+<ParamField path="data" type="JsonObject">
+  Optional additional error data
+</ParamField>
+
+**Standard Error Codes:**
+
+```kotlin
+object ErrorCode {
+    const val PARSE_ERROR = -32700
+    const val INVALID_REQUEST = -32600
+    const val METHOD_NOT_FOUND = -32601
+    const val INVALID_PARAMS = -32602
+    const val INTERNAL_ERROR = -32603
+    const val CONNECTION_CLOSED = -1
+    const val REQUEST_TIMEOUT = -2
+}
+```
+
+## Capability Types
+
+### ServerCapabilities
+
+Declares what features a server supports.
+
+```kotlin
+@Serializable
+data class ServerCapabilities(
+    val tools: Tools? = null,
+    val resources: Resources? = null,
+    val prompts: Prompts? = null,
+    val logging: JsonObject? = null,
+    val completions: JsonObject? = null,
+    val experimental: JsonObject? = null
+)
+```
+
+<Expandable title="Tools Capability">
+```kotlin
+@Serializable
+data class Tools(val listChanged: Boolean? = null)
+```
+
+<ParamField path="listChanged" type="Boolean">
+  Whether the server will send notifications when tool list changes
+</ParamField>
+</Expandable>
+
+<Expandable title="Resources Capability">
+```kotlin
+@Serializable
+data class Resources(
+    val listChanged: Boolean? = null,
+    val subscribe: Boolean? = null
+)
+```
+
+<ParamField path="listChanged" type="Boolean">
+  Whether the server will send notifications when resource list changes
+</ParamField>
+
+<ParamField path="subscribe" type="Boolean">
+  Whether the server supports resource subscriptions
+</ParamField>
+</Expandable>
+
+<Expandable title="Prompts Capability">
+```kotlin
+@Serializable
+data class Prompts(val listChanged: Boolean? = null)
+```
+
+<ParamField path="listChanged" type="Boolean">
+  Whether the server will send notifications when prompt list changes
+</ParamField>
+</Expandable>
+
+### ClientCapabilities
+
+Declares what features a client supports.
+
+```kotlin
+@Serializable
+data class ClientCapabilities(
+    val sampling: JsonObject? = null,
+    val roots: Roots? = null,
+    val elicitation: JsonObject? = null,
+    val experimental: JsonObject? = null
+)
+```
+
+<ParamField path="roots" type="Roots">
+  Root management capabilities
+</ParamField>
+
+```kotlin
+@Serializable
+data class Roots(val listChanged: Boolean? = null)
+```
+
+## Content Types
+
+Content blocks that can be included in messages.
+
+### ContentBlock
+
+Base sealed interface for content types.
+
+```kotlin
+sealed interface ContentBlock
+```
+
+**Implementations:**
+
+<Expandable title="TextContent">
+```kotlin
+@Serializable
+data class TextContent(
+    val text: String,
+    val annotations: Annotations? = null
+) : ContentBlock
+```
+
+Plain text content.
+</Expandable>
+
+<Expandable title="ImageContent">
+```kotlin
+@Serializable
+data class ImageContent(
+    val data: String,
+    val mimeType: String,
+    val annotations: Annotations? = null
+) : ContentBlock
+```
+
+Base64-encoded image content.
+</Expandable>
+
+<Expandable title="ResourceContent">
+```kotlin
+@Serializable
+data class ResourceContent(
+    val uri: String,
+    val mimeType: String? = null,
+    val text: String? = null,
+    val blob: String? = null,
+    val annotations: Annotations? = null
+) : ContentBlock
+```
+
+Reference to a resource by URI.
+</Expandable>
+
+## Tool Types
+
+### Tool
+
+Defines a callable tool.
+
+```kotlin
+@Serializable
+data class Tool(
+    val name: String,
+    val description: String,
+    val inputSchema: ToolSchema = ToolSchema(),
+    val outputSchema: ToolSchema? = null,
+    val title: String? = null,
+    val annotations: ToolAnnotations? = null,
+    val meta: JsonObject? = null
+)
+```
+
+<ParamField path="name" type="String" required>
+  Unique tool name
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Human-readable description of what the tool does
+</ParamField>
+
+<ParamField path="inputSchema" type="ToolSchema">
+  JSON Schema defining expected input parameters
+</ParamField>
+
+<ParamField path="outputSchema" type="ToolSchema">
+  JSON Schema defining output structure (optional)
+</ParamField>
+
+### ToolSchema
+
+JSON Schema for tool parameters.
+
+```kotlin
+@Serializable
+data class ToolSchema(
+    val type: String = "object",
+    val properties: JsonObject? = null,
+    val required: List<String>? = null
+)
+```
+
+## Resource Types
+
+### Resource
+
+Defines an available resource.
+
+```kotlin
+@Serializable
+data class Resource(
+    val uri: String,
+    val name: String,
+    val description: String,
+    val mimeType: String = "text/plain"
+)
+```
+
+<ParamField path="uri" type="String" required>
+  Unique resource URI
+</ParamField>
+
+<ParamField path="name" type="String" required>
+  Human-readable resource name
+</ParamField>
+
+<ParamField path="description" type="String" required>
+  Description of the resource content
+</ParamField>
+
+<ParamField path="mimeType" type="String">
+  MIME type (defaults to "text/plain")
+</ParamField>
+
+## Prompt Types
+
+### Prompt
+
+Defines a prompt template.
+
+```kotlin
+@Serializable
+data class Prompt(
+    val name: String,
+    val description: String? = null,
+    val arguments: List<PromptArgument>? = null
+)
+```
+
+<ParamField path="name" type="String" required>
+  Unique prompt name
+</ParamField>
+
+<ParamField path="description" type="String">
+  Human-readable description
+</ParamField>
+
+<ParamField path="arguments" type="List<PromptArgument>">
+  Arguments this prompt accepts
+</ParamField>
+
+### PromptArgument
+
+```kotlin
+@Serializable
+data class PromptArgument(
+    val name: String,
+    val description: String? = null,
+    val required: Boolean? = null
+)
+```
+
+## Exception Types
+
+### McpException
+
+Base exception for MCP errors.
+
+```kotlin
+class McpException(
+    val code: Int,
+    message: String,
+    val data: JsonObject? = null,
+    cause: Throwable? = null
+) : Exception(message, cause)
+```
+
+<ParamField path="code" type="Int" required>
+  Error code (see RPCError.ErrorCode)
+</ParamField>
+
+<ParamField path="message" type="String" required>
+  Error message
+</ParamField>
+
+<ParamField path="data" type="JsonObject">
+  Additional error data
+</ParamField>
+
+## Constants
+
+```kotlin
+// Protocol versions
+const val LATEST_PROTOCOL_VERSION = "2025-06-18"
+val SUPPORTED_PROTOCOL_VERSIONS = listOf("2025-06-18")
+
+// JSON-RPC version
+const val JSONRPC_VERSION = "2.0"
+```
+
+## See Also
+
+- [Dokka API Reference](https://kotlin.sdk.modelcontextprotocol.io/) - Complete KDoc documentation
+- [Protocol Specification](https://spec.modelcontextprotocol.io/) - Official MCP specification

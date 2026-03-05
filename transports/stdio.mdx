@@ -1,0 +1,333 @@
+---
+title: "STDIO Transport"
+description: "Use standard I/O streams for MCP communication in process-based scenarios"
+---
+
+The STDIO transport enables MCP communication over standard input/output streams, perfect for editor plugins, CLI tools, or any scenario where you spawn a helper process.
+
+## Overview
+
+STDIO transport tunnels JSON-RPC messages over stdin/stdout with no networking setup required. It's ideal for:
+
+- Editor extensions that spawn MCP servers
+- Command-line tools
+- Process-based IPC communication
+- Local development and testing
+
+## Client Setup
+
+### Basic Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+val process = ProcessBuilder("path/to/mcp-server").start()
+
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource().buffered(),
+    output = process.outputStream.asSink().buffered(),
+    error = process.errorStream.asSource().buffered()
+)
+
+val client = Client(
+    clientInfo = Implementation(
+        name = "my-client",
+        version = "1.0.0"
+    )
+)
+
+client.connect(transport)
+```
+
+### With Error Handling
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport.StderrSeverity
+
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource().buffered(),
+    output = process.outputStream.asSink().buffered(),
+    error = process.errorStream.asSource().buffered()
+) { stderrLine ->
+    when {
+        stderrLine.contains("error", ignoreCase = true) -> StderrSeverity.FATAL
+        stderrLine.contains("warning", ignoreCase = true) -> StderrSeverity.WARNING
+        else -> StderrSeverity.INFO
+    }
+}
+```
+
+### Complete Client Example
+
+Here's a full example that connects to an MCP server and calls a tool:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+fun main() = runBlocking {
+    // Start the MCP server process
+    val command = listOf("node", "server.js")
+    val process = ProcessBuilder(command).start()
+
+    // Create transport
+    val transport = StdioClientTransport(
+        input = process.inputStream.asSource().buffered(),
+        output = process.outputStream.asSink().buffered()
+    )
+
+    // Create and connect client
+    val client = Client(
+        clientInfo = Implementation(
+            name = "example-client",
+            version = "1.0.0"
+        )
+    )
+
+    client.connect(transport)
+
+    // List and call tools
+    val tools = client.listTools()
+    println("Available tools: ${tools.tools.map { it.name }}")
+
+    // Clean up
+    client.close()
+    process.destroy()
+}
+```
+
+## Server Setup
+
+### Basic Example
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+fun main() = runBlocking {
+    val server = Server(
+        serverInfo = Implementation(
+            name = "my-server",
+            version = "1.0.0"
+        ),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    val transport = StdioServerTransport(
+        inputStream = System.`in`.asSource().buffered(),
+        outputStream = System.out.asSink().buffered()
+    )
+
+    server.createSession(transport)
+    
+    val done = Job()
+    server.onClose {
+        done.complete()
+    }
+    done.join()
+}
+```
+
+### Weather Server Example
+
+Here's a complete working example of a weather server using STDIO transport:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
+
+fun main() = runBlocking {
+    val server = Server(
+        Implementation(
+            name = "weather",
+            version = "1.0.0"
+        ),
+        ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+
+    // Register weather tools
+    server.addTool(
+        name = "get_forecast",
+        description = "Get weather forecast for a location",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("latitude") {
+                    put("type", "number")
+                }
+                putJsonObject("longitude") {
+                    put("type", "number")
+                }
+            },
+            required = listOf("latitude", "longitude")
+        )
+    ) { request ->
+        val lat = request.arguments?.get("latitude")?.jsonPrimitive?.content
+        val lon = request.arguments?.get("longitude")?.jsonPrimitive?.content
+        CallToolResult(
+            content = listOf(
+                TextContent("Forecast for $lat,$lon: Sunny, 72°F")
+            )
+        )
+    }
+
+    val transport = StdioServerTransport(
+        inputStream = System.`in`.asSource().buffered(),
+        outputStream = System.out.asSink().buffered()
+    )
+
+    server.createSession(transport)
+    
+    val done = Job()
+    server.onClose {
+        done.complete()
+    }
+    done.join()
+}
+```
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="Client">
+    ### StdioClientTransport Parameters
+
+    - **input** (required): `Source` - Input stream to read messages from
+    - **output** (required): `Sink` - Output stream to write messages to  
+    - **error** (optional): `Source` - Error stream for stderr monitoring
+    - **sendChannel** (optional): `Channel<JSONRPCMessage>` - Channel for outbound messages (default: buffered)
+    - **classifyStderr** (optional): `(String) -> StderrSeverity` - Callback to classify stderr lines
+
+    ### Stderr Severity Levels
+
+    - **FATAL**: Calls error handler and terminates transport
+    - **WARNING**: Logs at WARN level, transport continues
+    - **INFO**: Logs at INFO level, transport continues
+    - **DEBUG**: Logs at DEBUG level, transport continues
+    - **IGNORE**: Discards message silently
+  </Tab>
+  
+  <Tab title="Server">
+    ### StdioServerTransport Parameters
+
+    - **inputStream** (required): `Source` - Input source for receiving messages
+    - **outputStream** (required): `Sink` - Output sink for sending messages
+  </Tab>
+</Tabs>
+
+## Error Handling
+
+<CodeGroup>
+```kotlin Client Error Handling
+transport.onError { error ->
+    println("Transport error: ${error.message}")
+}
+```
+
+```kotlin Server Error Handling
+val session = server.createSession(transport)
+session.onError { error ->
+    println("Session error: ${error.message}")
+}
+```
+</CodeGroup>
+
+## Lifecycle Management
+
+```kotlin
+// Close client connection
+client.close()
+
+// Destroy process
+process.destroy()
+
+// Wait for process to exit
+process.waitFor()
+```
+
+<Note>
+  The STDIO transport automatically handles message framing and serialization. Messages are delimited by newlines in the JSON-RPC format.
+</Note>
+
+## Platform Support
+
+- **JVM**: ✅ Full support
+- **Native**: ✅ Full support  
+- **JS/Wasm**: ✅ Full support
+
+## Best Practices
+
+1. **Always buffer streams**: Use `.buffered()` on Sources and Sinks for better performance
+2. **Handle stderr**: Provide a `classifyStderr` callback to properly handle server errors
+3. **Clean up processes**: Always destroy spawned processes when done
+4. **Use supervisors**: Wrap process creation in try-catch to handle spawn failures
+5. **Monitor process health**: Check `process.isAlive()` periodically in long-running scenarios
+
+## Common Issues
+
+### Process Won't Start
+
+```kotlin
+try {
+    val process = ProcessBuilder(command).start()
+} catch (e: IOException) {
+    println("Failed to start process: ${e.message}")
+}
+```
+
+### Deadlock on Large Messages
+
+Always use buffered streams to prevent blocking:
+
+```kotlin
+val transport = StdioClientTransport(
+    input = process.inputStream.asSource().buffered(),  // ✅ Buffered
+    output = process.outputStream.asSink().buffered()   // ✅ Buffered
+)
+```
+
+## Related Resources
+
+- [MCP Specification: STDIO Transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio)
+- [Client API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-client/io.modelcontextprotocol.kotlin.sdk.client/-stdio-client-transport/index.html)
+- [Server API Reference](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-server/io.modelcontextprotocol.kotlin.sdk.server/-stdio-server-transport/index.html)

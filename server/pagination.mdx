@@ -1,0 +1,361 @@
+---
+title: Pagination
+description: Handle large result sets with cursor-based pagination
+---
+
+MCP supports cursor-based pagination for list operations that may return large result sets. Clients use opaque cursors to fetch subsequent pages of results.
+
+## Supported Operations
+
+Pagination is available for these list operations:
+
+- `resources/list` - List available resources
+- `resources/templates/list` - List resource templates
+- `prompts/list` - List available prompts
+- `tools/list` - List available tools
+
+<Note>
+  Cursors are **opaque tokens**. Clients should not parse or persist them across sessions. They are only valid for the current connection.
+</Note>
+
+## How Pagination Works
+
+<Steps>
+
+### Client Requests First Page
+
+Client calls a list method without a cursor:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/list",
+  "id": 1
+}
+```
+
+### Server Returns Page with Cursor
+
+Server returns results and a `nextCursor` if more items exist:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "resources": [
+      {"uri": "note://1", "name": "Note 1", "description": "First"},
+      {"uri": "note://2", "name": "Note 2", "description": "Second"}
+    ],
+    "nextCursor": "2"
+  }
+}
+```
+
+### Client Requests Next Page
+
+Client includes the cursor to fetch the next page:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "resources/list",
+  "id": 2,
+  "params": {
+    "cursor": "2"
+  }
+}
+```
+
+### Server Returns Final Page
+
+When no more items remain, omit `nextCursor`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "resources": [
+      {"uri": "note://3", "name": "Note 3", "description": "Third"}
+    ]
+  }
+}
+```
+
+</Steps>
+
+## Implementing Pagination
+
+### Paginating Resources
+
+Implement pagination by handling the `ListResourcesRequest` directly:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ListResourcesRequest
+import io.modelcontextprotocol.kotlin.sdk.types.ListResourcesResult
+import io.modelcontextprotocol.kotlin.sdk.types.Method
+import io.modelcontextprotocol.kotlin.sdk.types.Resource
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+suspend fun main() {
+    val server = Server(
+        serverInfo = Implementation("example-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                resources = ServerCapabilities.Resources(),
+            ),
+        )
+    )
+
+    val session = server.createSession(
+        StdioServerTransport(
+            inputStream = System.`in`.asSource().buffered(),
+            outputStream = System.out.asSink().buffered()
+        )
+    )
+
+    val resources = listOf(
+        Resource(uri = "note://1", name = "Note 1", description = "First"),
+        Resource(uri = "note://2", name = "Note 2", description = "Second"),
+        Resource(uri = "note://3", name = "Note 3", description = "Third"),
+    )
+    val pageSize = 2
+
+    session.setRequestHandler<ListResourcesRequest>(Method.Defined.ResourcesList) { request, _ ->
+        val start = request.params?.cursor?.toIntOrNull() ?: 0
+        val page = resources.drop(start).take(pageSize)
+        val next = if (start + page.size < resources.size) (start + page.size).toString() else null
+
+        ListResourcesResult(
+            resources = page,
+            nextCursor = next,
+        )
+    }
+}
+```
+
+### Paginating Tools
+
+The default `tools/list` handler returns all tools without pagination. To add pagination, override the handler:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest
+import io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult
+
+session.setRequestHandler<ListToolsRequest>(Method.Defined.ToolsList) { request, _ ->
+    val allTools = server.tools.values.map { it.tool }
+    val pageSize = 10
+    
+    val start = request.params?.cursor?.toIntOrNull() ?: 0
+    val page = allTools.drop(start).take(pageSize)
+    val next = if (start + page.size < allTools.size) (start + page.size).toString() else null
+    
+    ListToolsResult(
+        tools = page,
+        nextCursor = next,
+    )
+}
+```
+
+### Paginating Prompts
+
+Similarly for prompts:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ListPromptsRequest
+import io.modelcontextprotocol.kotlin.sdk.types.ListPromptsResult
+
+session.setRequestHandler<ListPromptsRequest>(Method.Defined.PromptsList) { request, _ ->
+    val allPrompts = server.prompts.values.map { it.prompt }
+    val pageSize = 10
+    
+    val start = request.params?.cursor?.toIntOrNull() ?: 0
+    val page = allPrompts.drop(start).take(pageSize)
+    val next = if (start + page.size < allPrompts.size) (start + page.size).toString() else null
+    
+    ListPromptsResult(
+        prompts = page,
+        nextCursor = next,
+    )
+}
+```
+
+## Cursor Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Opaque Cursors" icon="eye-slash">
+    Treat cursors as opaque strings. Don't expose internal state or use predictable patterns.
+  </Card>
+  
+  <Card title="Session-Scoped" icon="clock">
+    Cursors are only valid for the current session. Don't persist them across connections.
+  </Card>
+  
+  <Card title="Consistent Ordering" icon="arrow-down-1-9">
+    Ensure items are returned in a stable order so pagination works correctly.
+  </Card>
+  
+  <Card title="Omit When Done" icon="circle-check">
+    Only include `nextCursor` when more items exist. Absent cursor signals end of results.
+  </Card>
+</CardGroup>
+
+## Advanced Patterns
+
+### Base64-Encoded Cursors
+
+Encode cursor data to hide implementation details:
+
+```kotlin
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+
+@OptIn(ExperimentalEncodingApi::class)
+fun createCursor(offset: Int): String {
+    return Base64.encode(offset.toString().encodeToByteArray())
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+fun parseCursor(cursor: String?): Int {
+    if (cursor == null) return 0
+    return try {
+        Base64.decode(cursor).decodeToString().toInt()
+    } catch (e: Exception) {
+        0
+    }
+}
+
+session.setRequestHandler<ListResourcesRequest>(Method.Defined.ResourcesList) { request, _ ->
+    val start = parseCursor(request.params?.cursor)
+    val page = resources.drop(start).take(pageSize)
+    val nextCursor = if (start + page.size < resources.size) {
+        createCursor(start + page.size)
+    } else null
+    
+    ListResourcesResult(
+        resources = page,
+        nextCursor = nextCursor,
+    )
+}
+```
+
+### Stateful Pagination
+
+For database-backed pagination, store query state:
+
+```kotlin
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+data class QueryState(
+    val query: String,
+    val offset: Int
+)
+
+val queryStates = ConcurrentHashMap<String, QueryState>()
+
+session.setRequestHandler<ListResourcesRequest>(Method.Defined.ResourcesList) { request, _ ->
+    val cursor = request.params?.cursor
+    val (query, offset) = if (cursor != null) {
+        queryStates[cursor] ?: QueryState("", 0)
+    } else {
+        QueryState("", 0)
+    }
+    
+    val results = database.query(query, offset, pageSize)
+    
+    val nextCursor = if (results.size == pageSize) {
+        val id = UUID.randomUUID().toString()
+        queryStates[id] = QueryState(query, offset + pageSize)
+        id
+    } else null
+    
+    ListResourcesResult(
+        resources = results,
+        nextCursor = nextCursor,
+    )
+}
+```
+
+<Warning>
+  Be careful with stateful cursors. They can accumulate memory. Consider adding expiration or cleanup logic.
+</Warning>
+
+## Result Types
+
+All paginated results include `nextCursor`:
+
+```kotlin
+data class ListResourcesResult(
+    val resources: List<Resource>,
+    val nextCursor: String? = null
+)
+
+data class ListToolsResult(
+    val tools: List<Tool>,
+    val nextCursor: String? = null
+)
+
+data class ListPromptsResult(
+    val prompts: List<Prompt>,
+    val nextCursor: String? = null
+)
+
+data class ListResourceTemplatesResult(
+    val resourceTemplates: List<ResourceTemplate>,
+    val nextCursor: String? = null
+)
+```
+
+## When to Paginate
+
+Use pagination when:
+
+- You have more than 50-100 items
+- Fetching all items is expensive (database queries, API calls)
+- Results change frequently and full scans are wasteful
+- Client memory or bandwidth is limited
+
+Skip pagination when:
+
+- You have fewer than 50 items
+- Results are static and cheap to compute
+- Clients always need the full list
+
+## Testing Pagination
+
+Test your pagination logic:
+
+```kotlin
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+
+// Test first page
+val page1 = session.listResources()
+page1.resources.size shouldBe pageSize
+page1.nextCursor shouldNotBe null
+
+// Test second page
+val page2 = session.listResources(cursor = page1.nextCursor)
+page2.resources.size shouldBe pageSize
+page2.nextCursor shouldNotBe null
+
+// Test final page
+val page3 = session.listResources(cursor = page2.nextCursor)
+page3.resources.size shouldBe 1
+page3.nextCursor shouldBe null  // No more pages
+```
+
+## Related Topics
+
+- [Resources](/server/resources) - Paginate resource lists
+- [Tools](/server/tools) - Paginate tool lists
+- [Prompts](/server/prompts) - Paginate prompt lists

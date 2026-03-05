@@ -1,0 +1,252 @@
+---
+title: Getting Started
+description: Create your first MCP server with the Kotlin SDK
+---
+
+The MCP Kotlin SDK provides a powerful and type-safe way to build MCP servers that expose resources, prompts, and tools to clients.
+
+## Installation
+
+Add the server SDK dependency to your project:
+
+```kotlin build.gradle.kts
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("io.modelcontextprotocol:kotlin-sdk-server:$mcpVersion")
+    
+    // For HTTP/SSE transport
+    implementation("io.ktor:ktor-server-netty:$ktorVersion")
+}
+```
+
+<Note>
+  The SDK uses Ktor for transport but does not include engine dependencies. You must add the appropriate Ktor server engine for your deployment.
+</Note>
+
+## Basic Server Setup
+
+Create a basic MCP server by instantiating the `Server` class with server information and capabilities:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+
+val server = Server(
+    serverInfo = Implementation(
+        name = "my-kotlin-server",
+        version = "1.0.0"
+    ),
+    options = ServerOptions(
+        capabilities = ServerCapabilities(
+            prompts = ServerCapabilities.Prompts(listChanged = true),
+            resources = ServerCapabilities.Resources(subscribe = true, listChanged = true),
+            tools = ServerCapabilities.Tools(listChanged = true),
+        ),
+    )
+)
+```
+
+<Steps>
+
+### Define Server Capabilities
+
+Declare which features your server supports in the `ServerCapabilities` object:
+
+- **`prompts`** - Enable prompt template support
+- **`resources`** - Enable resource exposure (with optional subscription support)
+- **`tools`** - Enable tool execution
+- **`logging`** - Enable server-to-client logging
+- **`completions`** - Enable argument autocompletion
+
+Each capability can have feature flags:
+- `listChanged` - Server will notify clients when the list changes
+- `subscribe` (resources only) - Clients can subscribe to resource updates
+
+### Add Features
+
+Register prompts, resources, and tools using the `add*` methods:
+
+```kotlin
+// Add a tool
+server.addTool(
+    name = "echo",
+    description = "Return whatever the user sent back to them",
+) { request ->
+    val text = request.arguments?.get("text")?.jsonPrimitive?.content ?: "(empty)"
+    CallToolResult(content = listOf(TextContent(text = "Echo: $text")))
+}
+
+// Add a prompt
+server.addPrompt(
+    name = "code-review",
+    description = "Ask the model to review a diff",
+    arguments = listOf(
+        PromptArgument(name = "diff", description = "Unified diff", required = true),
+    ),
+) { request ->
+    GetPromptResult(
+        description = "Quick code review helper",
+        messages = listOf(
+            PromptMessage(
+                role = Role.User,
+                content = TextContent(text = "Review this change:\n${request.arguments?.get("diff")}"),
+            ),
+        ),
+    )
+}
+
+// Add a resource
+server.addResource(
+    uri = "note://release/latest",
+    name = "Release notes",
+    description = "Last deployment summary",
+    mimeType = "text/markdown",
+) { request ->
+    ReadResourceResult(
+        contents = listOf(
+            TextResourceContents(
+                text = "Ship 42 reached production successfully.",
+                uri = request.uri,
+                mimeType = "text/markdown",
+            ),
+        ),
+    )
+}
+```
+
+### Create a Session
+
+A server can handle multiple concurrent sessions. Create a session by connecting to a transport:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
+
+suspend fun main() {
+    val server = Server(
+        serverInfo = Implementation("my-server", "1.0.0"),
+        options = ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true),
+            ),
+        )
+    )
+
+    // Add tools, prompts, resources...
+
+    // Create a session with STDIO transport
+    val transport = StdioServerTransport(
+        inputStream = System.`in`.asSource().buffered(),
+        outputStream = System.out.asSink().buffered()
+    )
+    
+    val session = server.createSession(transport)
+    
+    // Session is now active and handling requests
+}
+```
+
+</Steps>
+
+## Running with HTTP Transport
+
+For production deployments, use HTTP-based transports with Ktor:
+
+### SSE Transport (Legacy)
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
+
+fun main() {
+    val server = configureServer() // Your server instance
+    
+    embeddedServer(CIO, host = "127.0.0.1", port = 3000) {
+        mcp {
+            server
+        }
+    }.start(wait = true)
+}
+```
+
+### Streamable HTTP (Recommended)
+
+```kotlin
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
+
+fun main() {
+    val server = configureServer()
+    
+    embeddedServer(CIO, port = 3000) {
+        mcpStreamableHttp(path = "/api/mcp") {
+            server
+        }
+    }.start(wait = true)
+}
+```
+
+<Note>
+  Streamable HTTP is the recommended transport for remote deployments. It provides better performance and integrates well with modern infrastructure.
+</Note>
+
+## Testing Your Server
+
+Connect to your server using the MCP Inspector:
+
+```bash
+# For HTTP servers
+npx -y @modelcontextprotocol/inspector --connect http://localhost:3000
+
+# Or add to Claude Desktop
+claude mcp add --transport http my-server http://localhost:3000
+```
+
+## Session Management
+
+The `Server` class supports multiple concurrent sessions:
+
+```kotlin
+// Access all active sessions
+val sessions: Map<ServerSessionKey, ServerSession> = server.sessions
+
+// Register callbacks
+server.onConnect {
+    println("New client connected")
+}
+
+server.onClose {
+    println("Server shutting down")
+}
+
+// Close all sessions
+suspend fun shutdown() {
+    server.close()
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Prompts" icon="message" href="/server/prompts">
+    Learn how to create interactive prompt templates
+  </Card>
+  <Card title="Resources" icon="database" href="/server/resources">
+    Expose data sources to clients
+  </Card>
+  <Card title="Tools" icon="wrench" href="/server/tools">
+    Build executable functions for LLMs
+  </Card>
+  <Card title="Logging" icon="file-lines" href="/server/logging">
+    Stream structured logs to clients
+  </Card>
+</CardGroup>

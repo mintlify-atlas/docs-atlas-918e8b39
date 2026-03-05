@@ -1,0 +1,369 @@
+---
+title: "Sampling"
+description: "Enable servers to request LLM completions through your client"
+---
+
+## Overview
+
+Sampling allows MCP servers to request LLM completions from the client. This is a "reverse direction" feature where the server asks the client to call its preferred LLM and return the results.
+
+<Warning>
+  Always keep a human in the loop for sampling requests. Never automatically execute LLM calls without user approval, as they may have cost, privacy, or security implications.
+</Warning>
+
+## Declaring Sampling Capability
+
+To support sampling, declare the `sampling` capability when creating your client:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
+import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonObject
+
+val client = Client(
+    clientInfo = Implementation("demo-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            sampling = buildJsonObject { 
+                putJsonObject("tools") { } 
+            }
+        ),
+    ),
+)
+```
+
+<Note>
+  If your client doesn't support tool use during sampling, omit the `tools` property from the capability declaration:
+  
+  ```kotlin
+  capabilities = ClientCapabilities(
+      sampling = buildJsonObject { }
+  )
+  ```
+</Note>
+
+## Implementing the Sampling Handler
+
+Set up a request handler for `sampling/createMessage` to process sampling requests from the server:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageResult
+import io.modelcontextprotocol.kotlin.sdk.types.Method
+import io.modelcontextprotocol.kotlin.sdk.types.Role
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    val content = request.messages.lastOrNull()?.content
+    val prompt = if (content is TextContent) content.text else "your topic"
+    
+    CreateMessageResult(
+        model = "gpt-4o-mini",
+        role = Role.Assistant,
+        content = TextContent(text = "Here is a short note about $prompt"),
+    )
+}
+```
+
+<ParamField path="request" type="CreateMessageRequest">
+  The sampling request from the server
+  
+  <ParamField path="request.messages" type="List<SamplingMessage>" required>
+    List of messages that form the conversation context
+  </ParamField>
+  
+  <ParamField path="request.modelPreferences" type="ModelPreferences">
+    Optional hints about the preferred model characteristics
+  </ParamField>
+  
+  <ParamField path="request.systemPrompt" type="String">
+    Optional system prompt for the LLM
+  </ParamField>
+  
+  <ParamField path="request.maxTokens" type="Int" required>
+    Maximum number of tokens to generate
+  </ParamField>
+</ParamField>
+
+<ResponseField name="return" type="CreateMessageResult" required>
+  The result containing the LLM's response
+  
+  <ResponseField name="model" type="String" required>
+    Name of the model that was used (e.g., "gpt-4", "claude-3-opus")
+  </ResponseField>
+  
+  <ResponseField name="role" type="Role" required>
+    Role of the message author (typically `Role.Assistant`)
+  </ResponseField>
+  
+  <ResponseField name="content" type="Content" required>
+    The generated content (text or tool use results)
+  </ResponseField>
+  
+  <ResponseField name="stopReason" type="String">
+    Why the generation stopped (e.g., "end_turn", "max_tokens")
+  </ResponseField>
+</ResponseField>
+
+## Real-World Example with Anthropic
+
+Here's a complete example integrating with the Anthropic API:
+
+```kotlin
+import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
+import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageResult
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.Method
+import io.modelcontextprotocol.kotlin.sdk.types.Role
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonObject
+
+// Initialize Anthropic client
+val anthropic = AnthropicOkHttpClient.fromEnv()
+
+// Create MCP client with sampling capability
+val client = Client(
+    clientInfo = Implementation("mcp-client", "1.0.0"),
+    options = ClientOptions(
+        capabilities = ClientCapabilities(
+            sampling = buildJsonObject { putJsonObject("tools") { } }
+        ),
+    ),
+)
+
+// Set up sampling handler
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    // Extract the prompt from the request
+    val messages = request.messages.map { msg ->
+        MessageParam.builder()
+            .role(when (msg.role) {
+                Role.User -> MessageParam.Role.USER
+                Role.Assistant -> MessageParam.Role.ASSISTANT
+            })
+            .content(when (val content = msg.content) {
+                is TextContent -> content.text
+                else -> "[unsupported content]"
+            })
+            .build()
+    }
+    
+    // Call the Anthropic API
+    val response = anthropic.messages().create(
+        MessageCreateParams.builder()
+            .model(Model.CLAUDE_4_SONNET_20250514)
+            .maxTokens(request.maxTokens)
+            .messages(messages)
+            .build()
+    )
+    
+    // Return the result
+    CreateMessageResult(
+        model = "claude-4-sonnet",
+        role = Role.Assistant,
+        content = TextContent(
+            text = response.content().first().text().get().text()
+        ),
+        stopReason = response.stopReason().toString()
+    )
+}
+```
+
+## User Approval Flow
+
+Implement a user approval mechanism before executing LLM calls:
+
+```kotlin
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    // Extract prompt for display
+    val lastMessage = request.messages.lastOrNull()?.content
+    val prompt = if (lastMessage is TextContent) {
+        lastMessage.text
+    } else {
+        "[non-text content]"
+    }
+    
+    // Ask for user approval
+    println("Server is requesting LLM completion:")
+    println("Prompt: $prompt")
+    println("Max tokens: ${request.maxTokens}")
+    print("Approve? (y/n): ")
+    
+    val approved = readlnOrNull()?.lowercase() == "y"
+    
+    if (!approved) {
+        throw IllegalStateException("User denied sampling request")
+    }
+    
+    // Proceed with LLM call...
+    CreateMessageResult(
+        model = "gpt-4o-mini",
+        role = Role.Assistant,
+        content = TextContent(text = callYourLLM(prompt)),
+    )
+}
+```
+
+## Handling Tool Use in Sampling
+
+If you declared `sampling.tools` capability, the server may request tool-enabled sampling:
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.types.ToolUse
+import io.modelcontextprotocol.kotlin.sdk.types.ToolResult
+
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    // Check if tools are provided
+    val tools = request.tools ?: emptyList()
+    
+    // Call LLM with tool definitions
+    val response = anthropic.messages().create(
+        MessageCreateParams.builder()
+            .model(Model.CLAUDE_4_SONNET_20250514)
+            .maxTokens(request.maxTokens)
+            .messages(buildMessages(request.messages))
+            .tools(buildAnthropicTools(tools))
+            .build()
+    )
+    
+    // Handle tool use in the response
+    val firstContent = response.content().first()
+    
+    val resultContent = when {
+        firstContent.isText() -> {
+            TextContent(text = firstContent.text().get().text())
+        }
+        firstContent.isToolUse() -> {
+            val toolUse = firstContent.toolUse().get()
+            ToolUse(
+                id = toolUse.id(),
+                name = toolUse.name(),
+                arguments = convertJsonValue(toolUse._input())
+            )
+        }
+        else -> TextContent(text = "[unsupported response type]")
+    }
+    
+    CreateMessageResult(
+        model = "claude-4-sonnet",
+        role = Role.Assistant,
+        content = resultContent,
+        stopReason = response.stopReason().toString()
+    )
+}
+```
+
+## Error Handling
+
+Handle errors gracefully in your sampling handler:
+
+```kotlin
+client.setRequestHandler<CreateMessageRequest>(
+    Method.Defined.SamplingCreateMessage
+) { request, _ ->
+    try {
+        // Attempt to call LLM
+        val response = callLLM(request)
+        
+        CreateMessageResult(
+            model = "gpt-4o-mini",
+            role = Role.Assistant,
+            content = TextContent(text = response),
+        )
+    } catch (e: Exception) {
+        // Log the error
+        logger.error(e) { "Failed to complete sampling request" }
+        
+        // Re-throw as MCP error
+        throw McpException(
+            code = ErrorCode.InternalError,
+            message = "LLM request failed: ${e.message}"
+        )
+    }
+}
+```
+
+## Security and Privacy Considerations
+
+<Warning>
+  Sampling has important security and privacy implications:
+</Warning>
+
+- **Cost**: LLM API calls can be expensive. Always get user approval before making requests.
+- **Privacy**: Messages may contain sensitive information. Ensure users understand what data is being sent to the LLM.
+- **Rate limiting**: Implement rate limits to prevent abuse.
+- **Model selection**: Allow users to choose which model to use, as different models have different capabilities and costs.
+- **Content filtering**: Consider filtering or sanitizing prompts before sending to the LLM.
+
+## API Reference
+
+### Client Method
+
+<ParamField path="client.setRequestHandler" type="<CreateMessageRequest>(method, handler) -> Unit">
+  Registers a handler for sampling requests
+  
+  <ParamField path="method" type="Method" required>
+    Must be `Method.Defined.SamplingCreateMessage`
+  </ParamField>
+  
+  <ParamField path="handler" type="(CreateMessageRequest, RequestHandlerExtra) -> CreateMessageResult" required>
+    The handler function that processes sampling requests
+  </ParamField>
+</ParamField>
+
+### Types
+
+<ParamField path="CreateMessageRequest" type="class">
+  Request from server to create an LLM completion
+  
+  <ParamField path="messages" type="List<SamplingMessage>" required>
+    Conversation history to provide as context
+  </ParamField>
+  
+  <ParamField path="maxTokens" type="Int" required>
+    Maximum tokens to generate
+  </ParamField>
+  
+  <ParamField path="systemPrompt" type="String">
+    Optional system prompt
+  </ParamField>
+  
+  <ParamField path="tools" type="List<Tool>">
+    Optional tool definitions for tool-enabled sampling
+  </ParamField>
+</ParamField>
+
+<ParamField path="CreateMessageResult" type="class">
+  Response containing the LLM completion
+  
+  <ParamField path="model" type="String" required>
+    Name of the model used
+  </ParamField>
+  
+  <ParamField path="role" type="Role" required>
+    Role of the response (typically `Role.Assistant`)
+  </ParamField>
+  
+  <ParamField path="content" type="Content" required>
+    Generated content (text or tool use)
+  </ParamField>
+  
+  <ParamField path="stopReason" type="String">
+    Reason generation stopped
+  </ParamField>
+</ParamField>

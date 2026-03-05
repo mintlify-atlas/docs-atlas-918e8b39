@@ -1,0 +1,429 @@
+---
+title: ChannelTransport
+description: In-memory transport for testing MCP applications
+---
+
+The `ChannelTransport` provides an in-memory transport implementation using Kotlin Coroutines Channels. It's designed for testing MCP clients and servers without network communication.
+
+## Package
+
+```kotlin
+io.modelcontextprotocol.kotlin.sdk.testing
+```
+
+<Note>
+  This is part of the `kotlin-sdk-testing` module and marked as `@ExperimentalMcpApi`.
+</Note>
+
+## Class Definition
+
+```kotlin
+@ExperimentalMcpApi
+class ChannelTransport(
+    private val sendChannel: SendChannel<JSONRPCMessage>,
+    private val receiveChannel: ReceiveChannel<JSONRPCMessage>,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default
+) : AbstractClientTransport()
+```
+
+<ParamField path="sendChannel" type="SendChannel<JSONRPCMessage>" required>
+  Channel for sending messages
+</ParamField>
+
+<ParamField path="receiveChannel" type="ReceiveChannel<JSONRPCMessage>" required>
+  Channel for receiving messages
+</ParamField>
+
+<ParamField path="dispatcher" type="CoroutineDispatcher">
+  Coroutine dispatcher for the event loop (defaults to Dispatchers.Default)
+</ParamField>
+
+## Alternative Constructor
+
+Simplified constructor using a single channel for bidirectional communication:
+
+```kotlin
+ChannelTransport(
+    channel: Channel<JSONRPCMessage> = Channel(UNLIMITED),
+    dispatcher: CoroutineDispatcher = Dispatchers.Default
+)
+```
+
+<ParamField path="channel" type="Channel<JSONRPCMessage>">
+  Single channel for both sending and receiving (defaults to unlimited capacity)
+</ParamField>
+
+## Creating Linked Transports
+
+### createLinkedPair
+
+Creates a pair of interconnected transports for testing client-server communication.
+
+```kotlin
+companion object {
+    fun createLinkedPair(
+        capacity: Int = 256,
+        dispatcher: CoroutineDispatcher = Dispatchers.Default
+    ): LinkedTransports
+}
+
+data class LinkedTransports(
+    val clientTransport: ChannelTransport,
+    val serverTransport: ChannelTransport
+)
+```
+
+<ParamField path="capacity" type="Int">
+  Buffer capacity for internal channels (defaults to 256)
+</ParamField>
+
+<ParamField path="dispatcher" type="CoroutineDispatcher">
+  Coroutine dispatcher for both transports
+</ParamField>
+
+**Returns:** A `LinkedTransports` containing connected client and server transports
+
+## Usage Examples
+
+### Basic Client-Server Test
+
+```kotlin
+import io.modelcontextprotocol.kotlin.sdk.testing.ChannelTransport
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.*
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class McpTest {
+    @Test
+    fun testClientServerCommunication() = runTest {
+        // Create linked transports
+        val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+        
+        // Create server
+        val server = Server(
+            serverInfo = Implementation("test-server", "1.0.0"),
+            options = ServerOptions(
+                capabilities = ServerCapabilities(
+                    tools = ServerCapabilities.Tools()
+                )
+            )
+        )
+        
+        server.addTool(
+            name = "echo",
+            description = "Echoes input"
+        ) { request ->
+            val msg = request.params.arguments["message"]?.jsonPrimitive?.content
+            CallToolResult(
+                content = listOf(TextContent("Echo: $msg"))
+            )
+        }
+        
+        // Create client
+        val client = Client(
+            clientInfo = Implementation("test-client", "1.0.0")
+        )
+        
+        // Connect
+        server.createSession(serverTransport)
+        client.connect(clientTransport)
+        
+        // Test
+        val result = client.callTool(
+            name = "echo",
+            arguments = mapOf("message" to "Hello")
+        )
+        
+        val text = (result.content.first() as TextContent).text
+        assertEquals("Echo: Hello", text)
+        
+        // Cleanup
+        client.close()
+        server.close()
+    }
+}
+```
+
+### Testing Tool Execution
+
+```kotlin
+@Test
+fun testToolExecution() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    
+    val server = Server(serverInfo, serverOptions)
+    var toolCalled = false
+    
+    server.addTool(
+        name = "test_tool",
+        description = "Test tool"
+    ) { request ->
+        toolCalled = true
+        val arg = request.params.arguments["value"]?.jsonPrimitive?.int ?: 0
+        CallToolResult(
+            content = listOf(TextContent((arg * 2).toString()))
+        )
+    }
+    
+    val client = Client(clientInfo)
+    
+    server.createSession(serverTransport)
+    client.connect(clientTransport)
+    
+    val result = client.callTool(
+        name = "test_tool",
+        arguments = mapOf("value" to 21)
+    )
+    
+    assertTrue(toolCalled)
+    val text = (result.content.first() as TextContent).text
+    assertEquals("42", text)
+}
+```
+
+### Testing Resources
+
+```kotlin
+@Test
+fun testResourceOperations() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    
+    val server = Server(
+        serverInfo,
+        ServerOptions(
+            capabilities = ServerCapabilities(
+                resources = ServerCapabilities.Resources()
+            )
+        )
+    )
+    
+    server.addResource(
+        uri = "test://resource",
+        name = "Test Resource",
+        description = "A test resource"
+    ) { request ->
+        ReadResourceResult(
+            contents = listOf(
+                TextResourceContents(
+                    uri = request.params.uri,
+                    mimeType = "text/plain",
+                    text = "Resource content"
+                )
+            )
+        )
+    }
+    
+    val client = Client(clientInfo)
+    server.createSession(serverTransport)
+    client.connect(clientTransport)
+    
+    // List resources
+    val list = client.listResources()
+    assertEquals(1, list.resources.size)
+    assertEquals("test://resource", list.resources.first().uri)
+    
+    // Read resource
+    val result = client.readResource(
+        ReadResourceRequest(
+            ReadResourceRequestParams(uri = "test://resource")
+        )
+    )
+    
+    val content = result.contents.first() as TextResourceContents
+    assertEquals("Resource content", content.text)
+}
+```
+
+### Testing Notifications
+
+```kotlin
+@Test
+fun testNotifications() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    
+    val server = Server(
+        serverInfo,
+        ServerOptions(
+            capabilities = ServerCapabilities(
+                tools = ServerCapabilities.Tools(listChanged = true)
+            )
+        )
+    )
+    
+    val client = Client(clientInfo)
+    server.createSession(serverTransport)
+    client.connect(clientTransport)
+    
+    val notificationReceived = CompletableDeferred<Unit>()
+    
+    client.setNotificationHandler<ToolListChangedNotification>(
+        Method.Defined.NotificationsToolsListChanged
+    ) { notification ->
+        notificationReceived.complete(Unit)
+        CompletableDeferred(Unit)
+    }
+    
+    // Trigger notification
+    server.sessions.values.first().sendToolListChanged()
+    
+    // Wait for notification
+    withTimeout(1000) {
+        notificationReceived.await()
+    }
+}
+```
+
+### Testing Progress Notifications
+
+```kotlin
+@Test
+fun testProgressNotifications() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    
+    val server = Server(serverInfo, serverOptions)
+    
+    server.addTool(
+        name = "long_task",
+        description = "A long-running task"
+    ) { request ->
+        // Send progress updates
+        for (i in 1..5) {
+            sendProgressNotification(
+                progress = i.toDouble(),
+                total = 5.0,
+                message = "Step $i of 5"
+            )
+            delay(100)
+        }
+        
+        CallToolResult(
+            content = listOf(TextContent("Task complete"))
+        )
+    }
+    
+    val client = Client(clientInfo)
+    server.createSession(serverTransport)
+    client.connect(clientTransport)
+    
+    val progressUpdates = mutableListOf<Double>()
+    
+    val result = client.callTool(
+        name = "long_task",
+        arguments = emptyMap(),
+        options = RequestOptions(
+            onProgress = { progress ->
+                progressUpdates.add(progress.progress)
+            }
+        )
+    )
+    
+    assertEquals(5, progressUpdates.size)
+    assertEquals(listOf(1.0, 2.0, 3.0, 4.0, 5.0), progressUpdates)
+}
+```
+
+### Testing Error Handling
+
+```kotlin
+@Test
+fun testErrorHandling() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    
+    val server = Server(serverInfo, serverOptions)
+    
+    server.addTool(
+        name = "failing_tool",
+        description = "A tool that fails"
+    ) { request ->
+        throw IllegalArgumentException("Something went wrong")
+    }
+    
+    val client = Client(clientInfo)
+    server.createSession(serverTransport)
+    client.connect(clientTransport)
+    
+    val result = client.callTool(
+        name = "failing_tool",
+        arguments = emptyMap()
+    )
+    
+    assertTrue(result.isError == true)
+    val text = (result.content.first() as TextContent).text
+    assertTrue(text.contains("Something went wrong"))
+}
+```
+
+## Testing Best Practices
+
+### Use Coroutine Test Dispatcher
+
+```kotlin
+import kotlinx.coroutines.test.*
+
+@Test
+fun testWithTestDispatcher() = runTest {
+    val testDispatcher = StandardTestDispatcher(testScheduler)
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair(
+        dispatcher = testDispatcher
+    )
+    
+    // Test with controlled time
+}
+```
+
+### Cleanup Resources
+
+```kotlin
+@Test
+fun testWithCleanup() = runTest {
+    val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair()
+    val server = Server(serverInfo, serverOptions)
+    val client = Client(clientInfo)
+    
+    try {
+        server.createSession(serverTransport)
+        client.connect(clientTransport)
+        
+        // Test code
+        
+    } finally {
+        client.close()
+        server.close()
+    }
+}
+```
+
+### Set Appropriate Capacity
+
+For high-throughput tests:
+
+```kotlin
+val (clientTransport, serverTransport) = ChannelTransport.createLinkedPair(
+    capacity = 1000  // Higher capacity for many messages
+)
+```
+
+## Advantages
+
+- **No Network Overhead** - Pure in-memory communication
+- **Fast Execution** - Ideal for unit tests
+- **Deterministic** - No timing issues from network latency
+- **Isolated** - Tests don't interfere with each other
+- **Full Control** - Complete control over message flow
+
+## Limitations
+
+- **Not for Integration Tests** - Doesn't test actual network communication
+- **No Transport-Specific Behavior** - Doesn't test STDIO, WebSocket, or SSE specifics
+- **Different Threading** - May not catch threading issues present in real transports
+
+## See Also
+
+- [Transport](/api/core/transport) - Base transport interface
+- [Client](/api/client/client) - Client implementation
+- [Server](/api/server/server) - Server implementation
+- [Kotlin Coroutines Channels](https://kotlinlang.org/docs/channels.html) - Channels documentation
+- [Dokka: ChannelTransport](https://kotlin.sdk.modelcontextprotocol.io/kotlin-sdk-testing/io.modelcontextprotocol.kotlin.sdk.testing/-channel-transport/index.html)
