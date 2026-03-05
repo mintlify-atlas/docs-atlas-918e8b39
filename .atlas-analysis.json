@@ -1,0 +1,143 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "MCP Kotlin SDK",
+  "projectDescription": "Official Kotlin Multiplatform SDK for building Model Context Protocol servers and clients across JVM, Native, JS, and Wasm platforms",
+  "theme": "aspen",
+  "primaryColor": "#7F52FF",
+  "lightColor": "#A78BFF",
+  "darkColor": "#6537E0",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/mcp-primitives",
+              "concepts/capabilities",
+              "concepts/transports"
+            ]
+          },
+          {
+            "group": "Building Servers",
+            "pages": [
+              "server/getting-started",
+              "server/prompts",
+              "server/resources",
+              "server/tools",
+              "server/completion",
+              "server/logging",
+              "server/pagination"
+            ]
+          },
+          {
+            "group": "Building Clients",
+            "pages": [
+              "client/getting-started",
+              "client/roots",
+              "client/sampling"
+            ]
+          },
+          {
+            "group": "Transport Guides",
+            "pages": [
+              "transports/stdio",
+              "transports/streamable-http",
+              "transports/sse",
+              "transports/websocket",
+              "transports/testing"
+            ]
+          },
+          {
+            "group": "Examples & Advanced",
+            "pages": [
+              "examples/overview",
+              "advanced/multiplatform",
+              "advanced/ktor-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview"
+            ]
+          },
+          {
+            "group": "Core Module",
+            "pages": [
+              "api/core/types",
+              "api/core/protocol",
+              "api/core/transport",
+              "api/core/json-utils"
+            ]
+          },
+          {
+            "group": "Server Module",
+            "pages": [
+              "api/server/server",
+              "api/server/session",
+              "api/server/transports",
+              "api/server/ktor-extensions"
+            ]
+          },
+          {
+            "group": "Client Module",
+            "pages": [
+              "api/client/client",
+              "api/client/transports",
+              "api/client/ktor-extensions"
+            ]
+          },
+          {
+            "group": "Testing Module",
+            "pages": [
+              "api/testing/channel-transport"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Kotlin Multiplatform support (JVM, Native, JS, Wasm)",
+    "Type-safe MCP protocol implementation",
+    "Multiple transport options (STDIO, SSE, HTTP, WebSocket)",
+    "Server APIs for prompts, resources, and tools",
+    "Client APIs with capability enforcement",
+    "Coroutine-friendly async operations",
+    "Ktor integration for HTTP/WebSocket servers",
+    "Channel-based testing utilities"
+  ],
+  "publicApiSurface": [
+    "io.modelcontextprotocol.kotlin.sdk.server.Server",
+    "io.modelcontextprotocol.kotlin.sdk.client.Client",
+    "io.modelcontextprotocol.kotlin.sdk.types.*",
+    "io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport",
+    "io.modelcontextprotocol.kotlin.sdk.server.StreamableHttpServerTransport",
+    "io.modelcontextprotocol.kotlin.sdk.server.SSEServerTransport",
+    "io.modelcontextprotocol.kotlin.sdk.server.WebSocketMcpServerTransport",
+    "io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport",
+    "io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport",
+    "io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport",
+    "io.modelcontextprotocol.kotlin.sdk.client.WebSocketClientTransport",
+    "io.modelcontextprotocol.kotlin.sdk.testing.ChannelTransport",
+    "io.modelcontextprotocol.kotlin.sdk.server.mcp",
+    "io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp",
+    "io.modelcontextprotocol.kotlin.sdk.server.mcpWebSocket"
+  ]
+}
