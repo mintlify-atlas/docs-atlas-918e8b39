@@ -11,6 +11,50 @@ The `Client` class provides a high-level implementation for connecting to MCP se
 io.modelcontextprotocol.kotlin.sdk.client
 ```
 
+## Quick Start Helper
+
+### mcpClient
+
+A convenience function that creates a client and connects to a server in one call.
+
+```kotlin
+suspend fun mcpClient(
+    clientInfo: Implementation,
+    clientOptions: ClientOptions = ClientOptions(),
+    transport: Transport
+): Client
+```
+
+<ParamField path="clientInfo" type="Implementation" required>
+  Information about this client implementation (name and version)
+</ParamField>
+
+<ParamField path="clientOptions" type="ClientOptions">
+  Configuration options including capabilities
+</ParamField>
+
+<ParamField path="transport" type="Transport" required>
+  The transport to use for communication
+</ParamField>
+
+**Returns:** A connected `Client` instance ready to use
+
+**Example:**
+
+```kotlin
+val client = mcpClient(
+    clientInfo = Implementation("my-client", "1.0.0"),
+    transport = StdioClientTransport(processInput, processOutput)
+)
+
+// Client is already connected and ready to use
+val tools = client.listTools()
+```
+
+<Note>
+  This helper is marked with `@ExperimentalMcpApi` and combines client creation and connection in a single call.
+</Note>
+
 ## Class Definition
 
 ```kotlin
